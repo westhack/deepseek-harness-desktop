@@ -1,0 +1,14 @@
+node_modules
+out/
+logs/
+runtime/
+build-resources/
+.idea/
+package-lock.json
+data/
+public/electron/
+public/dist/
+pnpm-lock.yaml
+.yalc/
+yalc.lock
+*DS_Store

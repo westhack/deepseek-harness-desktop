@@ -1,0 +1,59 @@
+{
+  "name": "deepseek-harness-desktop",
+  "version": "0.0.1",
+  "description": "A community-maintained desktop client for DeepSeek Harness",
+  "main": "./public/electron/main.js",
+  "scripts": {
+    "dev": "ee-bin dev",
+    "build": "npm run build-frontend && npm run build-electron && ee-bin encrypt",
+    "start": "ee-bin start",
+    "dev-frontend": "ee-bin dev --serve=frontend",
+    "dev-electron": "ee-bin dev --serve=electron",
+    "build-frontend": "ee-bin build --cmds=frontend && ee-bin move --flag=frontend_dist",
+    "build-electron": "ee-bin build --cmds=electron",
+    "encrypt": "npm run build-electron && ee-bin encrypt",
+    "icon": "ee-bin icon",
+    "prepare:runtime": "node scripts/prepare-resources.js",
+    "build-w": "npm run prepare:runtime -- --platform=win32 --arch=x64 && npm run build && ee-bin build --cmds=win64",
+    "build-m": "npm run prepare:runtime -- --platform=darwin --arch=x64 && npm run build && ee-bin build --cmds=mac",
+    "build-m-arm64": "npm run prepare:runtime -- --platform=darwin --arch=arm64 && npm run build && ee-bin build --cmds=mac_arm64",
+    "build-l": "ee-bin build --cmds=linux",
+    "debug-dev": "cross-env DEBUG=ee-* ee-bin dev",
+    "debug-encrypt": "ee-bin encrypt",
+    "debug-electron": "cross-env DEBUG=ee-* ee-bin dev --serve=electron",
+    "debug-move": "ee-bin move --flag=frontend_dist",
+    "packages-build": "pnpm --filter ee-bin run build && pnpm --filter ee-core run build",
+    "re-sqlite": "electron-rebuild -f -w better-sqlite3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/westhack/deepseek-harness-desktop.git"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "desktop",
+    "electron",
+    "electron-egg"
+  ],
+  "author": "westhack",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.19.1",
+    "cross-env": "^7.0.3",
+    "debug": "^4.4.0",
+    "ee-bin": "^5.0.0",
+    "electron": "^39.8.10",
+    "electron-builder": "^26.3.5",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "dayjs": "^1.11.13",
+    "ee-core": "^5.0.1",
+    "electron-updater": "^6.7.3",
+    "semver": "^7.8.5",
+    "write-file-atomic": "^8.0.0"
+  }
+}

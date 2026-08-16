@@ -1,0 +1,35 @@
+{
+  "productName": "ee-dev",
+  "appId": "com.electron.ee-dev",
+  "copyright": "© 2025 duola Technology Co., Ltd.",
+  "directories": {  
+    "output": "out" 
+  },
+  "asar": true,
+  "electronLanguages": ["en-US", "zh-CN"],
+  "files": [
+    "public",
+    "package.json",
+    "node_modules/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "build/extraResources",
+      "to": "extraResources"
+    }
+  ],
+  "publish": [
+    {
+      "provider": "generic",
+      "url": ""
+    }
+  ],
+  "linux": {
+    "icon": "build/icons/icon.icns",
+    "artifactName": "${productName}-${os}-${version}-${arch}.${ext}",
+    "target": [
+      "deb"
+    ],
+    "category": "Utility"
+  }
+}

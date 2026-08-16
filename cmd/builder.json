@@ -1,0 +1,57 @@
+{
+  "productName": "DeepSeek Harness Desktop",
+  "appId": "dev.dsh.desktop",
+  "copyright": "Copyright © 2026 DeepSeek Harness Desktop contributors",
+  "directories": {
+    "output": "out"
+  },
+  "asar": true,
+  "electronLanguages": ["en-US", "zh-CN"],
+  "files": [
+    "public",
+    "package.json",
+    "node_modules/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "build-resources/runtime",
+      "to": "runtime"
+    },
+    {
+      "from": "build-resources/dsh",
+      "to": "dsh"
+    },
+    {
+      "from": "build/menu-version-manager.png",
+      "to": "ui/version-manager.png"
+    }
+  ],
+  "nsis": {
+    "oneClick": false,
+    "allowElevation": true,
+    "allowToChangeInstallationDirectory": true,
+    "installerIcon": "build/icons/icon.ico",
+    "uninstallerIcon": "build/icons/icon.ico",
+    "installerHeaderIcon": "build/icons/icon.ico",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "DeepSeek Harness Desktop"
+  },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "westhack",
+      "repo": "deepseek-harness-desktop",
+      "releaseType": "release"
+    }
+  ],
+  "win": {
+    "icon": "build/icons/icon.ico",
+    "artifactName": "deepseek-harness-desktop-Setup-${version}-${arch}.${ext}",
+    "target": [
+      {
+        "target": "nsis"
+      }
+    ]
+  }
+}

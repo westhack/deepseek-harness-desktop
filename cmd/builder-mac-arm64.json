@@ -1,0 +1,49 @@
+{
+  "productName": "DeepSeek Harness Desktop",
+  "appId": "dev.dsh.desktop",
+  "copyright": "Copyright © 2026 DeepSeek Harness Desktop contributors",
+  "directories": {
+    "output": "out"
+  },
+  "asar": true,
+  "electronLanguages": ["en-US", "zh-CN"],
+  "files": [
+    "public",
+    "package.json",
+    "node_modules/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "build-resources/runtime",
+      "to": "runtime"
+    },
+    {
+      "from": "build-resources/dsh",
+      "to": "dsh"
+    },
+    {
+      "from": "build/menu-version-manager.png",
+      "to": "ui/version-manager.png"
+    }
+  ],
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "westhack",
+      "repo": "deepseek-harness-desktop",
+      "releaseType": "release"
+    }
+  ],
+  "mac": {
+    "category": "public.app-category.developer-tools",
+    "icon": "build/icons/icon.icns",
+    "artifactName": "deepseek-harness-desktop-${version}-${arch}.${ext}",
+    "darkModeSupport": true,
+    "hardenedRuntime": false,
+    "gatekeeperAssess": false,
+    "identity": "-",
+    "target": [
+      "dmg"
+    ]
+  }
+}
