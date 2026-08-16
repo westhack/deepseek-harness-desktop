@@ -3,7 +3,7 @@
   <h1>DeepSeek Harness Desktop</h1>
   <p>A desktop client for DeepSeek Harness, built with Electron 39 + Vue 3 + Naive UI</p>
   <p>
-    <a href="README.zh-CN.md">English</a> &nbsp;|&nbsp; 简体中文
+    English &nbsp;|&nbsp; <a href="README.zh-CN.md">简体中文</a>
   </p>
   <p>
     <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-blue" alt="platform">
