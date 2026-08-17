@@ -24,6 +24,10 @@ DeepSeek Harness Desktop 是一款基于 **Electron 39 + Vue 3 + Naive UI** 技�
 
 > 本项目为社区独立维护，与 DeepSeek 官方无任何隶属关系。应用不修改官方 DSH 的代码、数据与行为，DSH 按其自身许可证运行。
 
+<img src="./public/images/DeepSeek-Harness-Desktop.png">
+
+<img src="./public/images/DeepSeek-Harness.png">
+
 ## 核心特性
 
 ### 运行时托管
@@ -241,7 +245,7 @@ electron-egg/
 
 ## 许可证
 
-[Apache License 2.0](LICENSE)
+[MIT](LICENSE)
 
 ## 致谢
 
