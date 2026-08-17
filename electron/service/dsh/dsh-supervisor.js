@@ -42,6 +42,32 @@ class DshSupervisor extends EventEmitter {
   }
 
   /**
+   * 构建干净的子进程环境变量
+   * Electron 主进程的 process.env 可能包含 NODE_OPTIONS、ELECTRON_* 等变量，
+   * 这些变量会干扰内置 Node.js 子进程的 ESM loader，导致 DSH 插件加载失败
+   * @returns {Record<string, string>}
+   */
+  buildChildEnv() {
+    const env = { ...process.env };
+    // 移除 Electron 特有变量，避免干扰 Node.js 运行时
+    delete env.NODE_OPTIONS;
+    delete env.ELECTRON_RUN_AS_NODE;
+    delete env.ELECTRON_NO_ATTACH_NOTIFY;
+    delete env.ELECTRON_DISABLE_SECURITY_WARNINGS;
+    delete env.ELECTRON_ENABLE_LOGGING;
+    // macOS/Linux：确保 PATH 包含常用 bin 目录
+    if (process.platform !== 'win32') {
+      const paths = ['/usr/local/bin', '/usr/bin', '/bin', '/opt/homebrew/bin'];
+      const existing = env.PATH ? env.PATH.split(':') : [];
+      for (const p of paths) {
+        if (!existing.includes(p)) existing.push(p);
+      }
+      env.PATH = existing.join(':');
+    }
+    return env;
+  }
+
+  /**
    * 启动 DEEPSEEK HARNESS web 子进程
    * @param {{ version: string, root: string, entry: string, source: string }} dsh
    * @param {number} timeoutMs
@@ -56,8 +82,8 @@ class DshSupervisor extends EventEmitter {
 
     return await new Promise((resolve, reject) => {
       const child = spawn(this.nodePath, [dsh.entry, 'web', '--port', '0'], {
-        cwd: os.homedir(),
-        env: process.env,
+        cwd: dsh.root,
+        env: this.buildChildEnv(),
         shell: false,
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe']

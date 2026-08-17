@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { getBaseDir } = require('ee-core/ps');
+const { getBaseDir, getElectronDir, isPackaged } = require('ee-core/ps');
 
 /**
  * 默认配置
@@ -9,6 +9,9 @@ const { getBaseDir } = require('ee-core/ps');
  * 主窗口即版本管理器窗口，加载 frontend 构建产物
  */
 module.exports = () => {
+  // 开发模式：preload 在源码目录 electron/preload/bridge.js
+  // 打包模式：esbuild 把 electron/ 编译到 public/electron/，preload 在 public/electron/preload/bridge.js
+  const electronDir = isPackaged() ? getElectronDir() : path.join(getBaseDir(), 'electron');
   return {
     openDevTools: false,
     singleLock: true,
@@ -26,7 +29,7 @@ module.exports = () => {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        preload: path.join(getBaseDir(), 'electron', 'preload', 'bridge.js'),
+        preload: path.join(electronDir, 'preload', 'bridge.js'),
       },
     },
     logger: {
