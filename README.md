@@ -24,6 +24,10 @@ Compared to running `npx @deepseek-ai/dsh web` directly, this project packages t
 
 > This is a community-maintained project with no affiliation to DeepSeek. The app does not modify any code, data, or behavior of the official DSH; DSH runs under its own license.
 
+<img src="./public/images/DeepSeek-Harness-Desktop.png">
+
+<img src="./public/images/DeepSeek-Harness.png">
+
 ## Key Features
 
 ### Runtime Hosting
@@ -243,7 +247,7 @@ This project only takes responsibility for runtime management, version managemen
 
 ## License
 
-[Apache License 2.0](LICENSE)
+[MIT](LICENSE)
 
 ## Acknowledgements
 
