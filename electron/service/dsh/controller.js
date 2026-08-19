@@ -79,11 +79,14 @@ class AppController extends EventEmitter {
         this.availableVersions = catalog.versions;
       }
       await this.versions.install(version, this.availableVersions.map((item) => item.version), (progress) => this.emit('progress', progress));
-      if (!this.state.selectedVersion) {
+      const wasFirstInstall = !this.state.selectedVersion;
+      if (wasFirstInstall) {
         this.state.selectedVersion = version;
         await this.store.write(this.state);
       }
       this.error = null;
+      // 安装成功后触发默认插件安装（由 manager 监听处理，不阻塞此处返回）
+      this.emit('installed', { version, isFirstInstall: wasFirstInstall });
     } catch (error) {
       this.error = error instanceof Error ? error.message : '安装失败';
       throw error;
@@ -146,6 +149,37 @@ class AppController extends EventEmitter {
     return await this.emitSnapshot();
   }
 
+  /**
+   * 保存插件源列表
+   * @param {Array} sources
+   */
+  async setPluginSources(sources) {
+    this.state.pluginSources = this.store.validatePluginSources(sources);
+    await this.store.write(this.state);
+    return await this.emitSnapshot();
+  }
+
+  /**
+   * 保存备份配置
+   * @param {object} config
+   */
+  async setBackupConfig(config) {
+    this.state.backupConfig = this.store.validateBackupConfig(config);
+    await this.store.write(this.state);
+    return await this.emitSnapshot();
+  }
+
+  /**
+   * 记录自动备份执行时间
+   * @param {string|null} lastRun ISO 时间字符串
+   */
+  async touchAutoBackup(lastRun) {
+    if (!this.state.backupConfig) this.state.backupConfig = this.store.validateBackupConfig(null);
+    this.state.backupConfig.autoBackup.lastRun = lastRun;
+    await this.store.write(this.state);
+    return await this.emitSnapshot();
+  }
+
   isRuntimeActive() {
     return !['idle', 'failed'].includes(this.supervisor.status);
   }
@@ -166,6 +200,8 @@ class AppController extends EventEmitter {
       locale: resolveLocale(this.state.localePreference, this.systemLocale),
       localePreference: this.state.localePreference,
       registryPreference: this.state.registryPreference,
+      pluginSources: this.state.pluginSources || [],
+      backupConfig: this.state.backupConfig || null,
       nodeVersion: this.nodeVersion,
       latestVersion: this.latestVersion,
       selectedVersion: this.state.selectedVersion,

@@ -14,6 +14,8 @@ const state = reactive({
     locale: initialLocale,
     localePreference: 'system',
     registryPreference: 'official',
+    pluginSources: [],
+    backupConfig: null,
     nodeVersion: null,
     latestVersion: null,
     selectedVersion: null,

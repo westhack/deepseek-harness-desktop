@@ -23,7 +23,27 @@ const channels = {
   appUpdateCheck: 'desktop-update:check',
   appUpdateDownload: 'desktop-update:download',
   appUpdateInstall: 'desktop-update:install',
-  appUpdateChanged: 'desktop-update:changed'
+  appUpdateChanged: 'desktop-update:changed',
+  pluginInstall: 'dsh:plugin-install',
+  pluginProgress: 'dsh:plugin-progress',
+  readClipboard: 'dsh:read-clipboard',
+  writeClipboard: 'dsh:write-clipboard',
+  pluginMarketFetch: 'dsh:plugin-market-fetch',
+  pluginRunCommand: 'dsh:plugin-run-command',
+  pluginSourcesSet: 'dsh:plugin-sources-set',
+  // 备份与恢复
+  backupExport: 'dsh:backup-export',
+  backupImport: 'dsh:backup-import',
+  backupLocalSave: 'dsh:backup-local-save',
+  backupLocalLoad: 'dsh:backup-local-load',
+  backupConfigSet: 'dsh:backup-config-set',
+  backupWebdavTest: 'dsh:backup-webdav-test',
+  backupWebdavPush: 'dsh:backup-webdav-push',
+  backupWebdavPull: 'dsh:backup-webdav-pull',
+  backupGistTest: 'dsh:backup-gist-test',
+  backupGistPush: 'dsh:backup-gist-push',
+  backupGistPull: 'dsh:backup-gist-pull',
+  backupAutoRun: 'dsh:backup-auto-run'
 };
 
 /**
@@ -61,6 +81,30 @@ const api = {
     const handler = (_event, snapshot) => listener(snapshot);
     ipcRenderer.on(channels.appUpdateChanged, handler);
     return () => ipcRenderer.removeListener(channels.appUpdateChanged, handler);
+  },
+  readClipboard: () => ipcRenderer.invoke(channels.readClipboard),
+  writeClipboard: (text) => ipcRenderer.invoke(channels.writeClipboard, String(text)),
+  installPlugin: (command) => ipcRenderer.invoke(channels.pluginInstall, command),
+  runPluginCommand: (command) => ipcRenderer.invoke(channels.pluginRunCommand, command),
+  fetchPluginMarket: (source) => ipcRenderer.invoke(channels.pluginMarketFetch, source),
+  setPluginSources: (sources) => ipcRenderer.invoke(channels.pluginSourcesSet, sources),
+  // 备份与恢复
+  backupExport: (profile) => ipcRenderer.invoke(channels.backupExport, profile),
+  backupImport: (backup) => ipcRenderer.invoke(channels.backupImport, backup),
+  backupLocalSave: (backup, defaultName) => ipcRenderer.invoke(channels.backupLocalSave, backup, defaultName),
+  backupLocalLoad: () => ipcRenderer.invoke(channels.backupLocalLoad),
+  backupSetConfig: (config) => ipcRenderer.invoke(channels.backupConfigSet, config),
+  backupWebdavTest: (config) => ipcRenderer.invoke(channels.backupWebdavTest, config),
+  backupWebdavPush: (backup, config) => ipcRenderer.invoke(channels.backupWebdavPush, backup, config),
+  backupWebdavPull: (config) => ipcRenderer.invoke(channels.backupWebdavPull, config),
+  backupGistTest: (config) => ipcRenderer.invoke(channels.backupGistTest, config),
+  backupGistPush: (backup, config) => ipcRenderer.invoke(channels.backupGistPush, backup, config),
+  backupGistPull: (config) => ipcRenderer.invoke(channels.backupGistPull, config),
+  backupAutoRun: () => ipcRenderer.invoke(channels.backupAutoRun),
+  onPluginProgress: (listener) => {
+    const handler = (_event, progress) => listener(progress);
+    ipcRenderer.on(channels.pluginProgress, handler);
+    return () => ipcRenderer.removeListener(channels.pluginProgress, handler);
   }
 };
 

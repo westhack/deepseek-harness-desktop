@@ -1,14 +1,15 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, session, shell, Tray } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, Notification, session, shell, Tray } = require('electron');
 const electronUpdater = require('electron-updater');
+const { spawn } = require('node:child_process');
 const path = require('node:path');
 const semver = require('semver');
 const { logger } = require('ee-core/log');
 const { getMainWindow } = require('ee-core/electron');
 const { isDev } = require('ee-core/ps');
 
-const { channels, parseExactVersion, parseLocalePreference, parseRegistryPreference } = require('../../shared/contracts');
+const { channels, parseExactVersion, parseLocalePreference, parseRegistryPreference, parsePluginCommand, parseDshCommand, normalizePluginSource } = require('../../shared/contracts');
 const { AppController } = require('./controller');
 const { DshSupervisor } = require('./dsh-supervisor');
 const { DshRegistry } = require('./registry');
@@ -17,6 +18,7 @@ const { StateStore } = require('./state-store');
 const { resolveRuntimePaths } = require('./runtime-paths');
 const { configureNetworkProxy, applyNetworkProxy } = require('./network-proxy');
 const { DesktopUpdater } = require('../desktop-updater');
+const { BackupManager, WebdavClient, GistClient, validateBackup } = require('./backup');
 const menuCopy = require('./menu-copy');
 
 const APP_NAME = 'DeepSeek Harness Desktop';
@@ -107,6 +109,18 @@ class DshManager {
       });
       this.controller.on('snapshot', (snapshot) => this.handleSnapshot(snapshot));
       this.controller.on('progress', (progress) => this.sendToManager(channels.installProgress, progress));
+      // DSH 版本安装成功后，默认安装 dshmarket 插件到 web profile
+      this.controller.on('installed', ({ version, isFirstInstall }) => {
+        void this.installDefaultPlugin(version, isFirstInstall);
+      });
+
+      // 5.1 备份管理器
+      this.backupManager = new BackupManager({
+        controller: this.controller,
+        spawnDshCli: (resolved, args, env, send, options) => this.spawnDshCli(resolved, args, env, send, options),
+        appVersion: this.controller.appVersion,
+      });
+      this.autoBackupTimer = null;
 
       // 6. 注册 IPC
       this.registerIpc();
@@ -136,6 +150,9 @@ class DshManager {
 
       // 11. 安装系统托盘并拦截主窗口关闭行为（点 x 号隐藏到托盘）
       this.installTrayAndWindowPolicy();
+
+      // 12. 启动自动备份调度（每小时检查一次是否到达间隔）
+      this.scheduleAutoBackup();
 
       logger.info('[dsh-manager] initialized successfully');
     } catch (error) {
@@ -408,6 +425,435 @@ class DshManager {
       if (this.controller.isRuntimeActive()) await this.controller.stop();
       this.desktopUpdater.install();
     });
+    ipcMain.handle(channels.readClipboard, (event) => {
+      assertManager(event);
+      try {
+        return clipboard.readText() || '';
+      } catch {
+        return '';
+      }
+    });
+    ipcMain.handle(channels.writeClipboard, (event, text) => {
+      assertManager(event);
+      try {
+        clipboard.writeText(String(text));
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    ipcMain.handle(channels.pluginInstall, async (event, rawCommand) => {
+      assertManager(event);
+      return await this.runPluginInstall(rawCommand, event.sender);
+    });
+    ipcMain.handle(channels.pluginMarketFetch, async (event, rawSource) => {
+      assertManager(event);
+      const endpoint = normalizePluginSource(rawSource);
+      return await this.fetchPluginMarket(endpoint);
+    });
+    ipcMain.handle(channels.pluginRunCommand, async (event, rawCommand) => {
+      assertManager(event);
+      return await this.runPluginCommand(rawCommand, event.sender);
+    });
+    ipcMain.handle(channels.pluginSourcesSet, async (event, sources) => {
+      assertManager(event);
+      return await this.controller.setPluginSources(sources);
+    });
+
+    // ===== 备份与恢复 =====
+    ipcMain.handle(channels.backupExport, async (event, profile) => {
+      assertManager(event);
+      const send = (level, line) => {
+        if (!event.sender.isDestroyed()) event.sender.send(channels.pluginProgress, { level, line, ts: Date.now() });
+      };
+      return await this.backupManager.exportProfile(profile, send);
+    });
+    ipcMain.handle(channels.backupImport, async (event, backup) => {
+      assertManager(event);
+      const send = (level, line) => {
+        if (!event.sender.isDestroyed()) event.sender.send(channels.pluginProgress, { level, line, ts: Date.now() });
+      };
+      return await this.backupManager.importProfile(backup, send);
+    });
+    ipcMain.handle(channels.backupLocalSave, async (event, backup, defaultName) => {
+      assertManager(event);
+      const result = await dialog.showSaveDialog(getMainWindow(), {
+        title: '保存备份',
+        defaultPath: defaultName || `dsh-backup-${Date.now()}.json`,
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+      const writeFileAtomic = require('write-file-atomic');
+      await writeFileAtomic(result.filePath, `${JSON.stringify(backup, null, 2)}\n`, { mode: 0o600 });
+      return { ok: true, path: result.filePath };
+    });
+    ipcMain.handle(channels.backupLocalLoad, async (event) => {
+      assertManager(event);
+      const result = await dialog.showOpenDialog(getMainWindow(), {
+        title: '选择备份文件',
+        properties: ['openFile'],
+        filters: [{ name: 'JSON', extensions: ['json'] }],
+      });
+      if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true };
+      const { readFile } = require('node:fs/promises');
+      const content = await readFile(result.filePaths[0], 'utf8');
+      const backup = JSON.parse(content);
+      const validation = validateBackup(backup);
+      if (!validation.ok) throw new Error(`备份文件校验失败：${validation.error}`);
+      return { ok: true, backup: validation.backup, path: result.filePaths[0] };
+    });
+    ipcMain.handle(channels.backupConfigSet, async (event, config) => {
+      assertManager(event);
+      return await this.controller.setBackupConfig(config);
+    });
+    ipcMain.handle(channels.backupWebdavTest, async (event, config) => {
+      assertManager(event);
+      const client = new WebdavClient(config);
+      return await client.test();
+    });
+    ipcMain.handle(channels.backupWebdavPush, async (event, backup, config) => {
+      assertManager(event);
+      const client = new WebdavClient(config);
+      await client.ensureDir(config.path);
+      const filePath = `${config.path.replace(/\/+$/, '')}/${config.filename}`;
+      await client.put(filePath, JSON.stringify(backup, null, 2));
+      return { ok: true, path: filePath };
+    });
+    ipcMain.handle(channels.backupWebdavPull, async (event, config) => {
+      assertManager(event);
+      const client = new WebdavClient(config);
+      const filePath = `${config.path.replace(/\/+$/, '')}/${config.filename}`;
+      const content = await client.get(filePath);
+      const backup = JSON.parse(content);
+      const validation = validateBackup(backup);
+      if (!validation.ok) throw new Error(`WebDAV 备份校验失败：${validation.error}`);
+      return { ok: true, backup: validation.backup };
+    });
+    ipcMain.handle(channels.backupGistTest, async (event, config) => {
+      assertManager(event);
+      const client = new GistClient(config);
+      return await client.test();
+    });
+    ipcMain.handle(channels.backupGistPush, async (event, backup, config) => {
+      assertManager(event);
+      const client = new GistClient(config);
+      const result = await client.push(JSON.stringify(backup, null, 2));
+      // 首次创建 gist 后回写 gistId 到配置
+      if (result.gistId && result.gistId !== config.gistId) {
+        const newConfig = { ...config, gistId: result.gistId };
+        await this.controller.setBackupConfig(this.controller.state.backupConfig
+          ? { ...this.controller.state.backupConfig, gist: newConfig }
+          : { gist: newConfig });
+      }
+      return { ok: true, gistId: result.gistId, url: result.url };
+    });
+    ipcMain.handle(channels.backupGistPull, async (event, config) => {
+      assertManager(event);
+      const client = new GistClient(config);
+      const content = await client.pull();
+      const backup = JSON.parse(content);
+      const validation = validateBackup(backup);
+      if (!validation.ok) throw new Error(`Gist 备份校验失败：${validation.error}`);
+      return { ok: true, backup: validation.backup };
+    });
+    ipcMain.handle(channels.backupAutoRun, async (event) => {
+      assertManager(event);
+      return await this.runAutoBackup(true);
+    });
+  }
+
+  /**
+   * 自动备份调度：每小时检查一次是否到达间隔
+   */
+  scheduleAutoBackup() {
+    if (this.autoBackupTimer) clearInterval(this.autoBackupTimer);
+    this.autoBackupTimer = setInterval(() => { void this.runAutoBackup(false); }, 60 * 60 * 1000);
+    // 启动后 5 分钟做首次检查（覆盖应用长时间运行未触发的场景）
+    setTimeout(() => { void this.runAutoBackup(false); }, 5 * 60 * 1000);
+  }
+
+  /**
+   * 执行自动备份（若开关打开且到达间隔）
+   * @param {boolean} force 强制执行（手动触发）
+   * @returns {Promise<{ok: boolean, skipped?: string, error?: string}>}
+   */
+  async runAutoBackup(force) {
+    if (!this.backupManager) return { ok: false, error: '备份管理器未初始化' };
+    const config = this.controller?.state?.backupConfig;
+    if (!config) return { ok: false, error: '备份配置未加载' };
+    if (!force && !config.autoBackup?.enabled) return { ok: false, skipped: 'disabled' };
+
+    // 间隔检查
+    if (!force && config.autoBackup.lastRun) {
+      const last = new Date(config.autoBackup.lastRun).getTime();
+      const intervalMs = (config.autoBackup.intervalHours || 24) * 60 * 60 * 1000;
+      if (Date.now() - last < intervalMs) {
+        return { ok: false, skipped: 'not-due' };
+      }
+    }
+
+    const profile = config.profile || 'web';
+    const target = config.autoBackup.target || 'local';
+    try {
+      logger.info(`[backup] auto backup start, profile=${profile}, target=${target}`);
+      const backup = await this.backupManager.exportProfile(profile, (level, line) => {
+        logger.info(`[backup] ${level}: ${line}`);
+      });
+
+      if (target === 'local') {
+        const userData = app.getPath('userData');
+        const writeFileAtomic = require('write-file-atomic');
+        const path = require('node:path');
+        const backupDir = path.join(userData, 'backups');
+        const { mkdir } = require('node:fs/promises');
+        await mkdir(backupDir, { recursive: true });
+        const file = path.join(backupDir, `dsh-backup-${Date.now()}.json`);
+        await writeFileAtomic(file, `${JSON.stringify(backup, null, 2)}\n`, { mode: 0o600 });
+      } else if (target === 'webdav') {
+        const client = new WebdavClient(config.webdav);
+        await client.ensureDir(config.webdav.path);
+        const filePath = `${config.webdav.path.replace(/\/+$/, '')}/${config.webdav.filename}`;
+        await client.put(filePath, JSON.stringify(backup, null, 2));
+      } else if (target === 'gist') {
+        const client = new GistClient(config.gist);
+        const result = await client.push(JSON.stringify(backup, null, 2));
+        if (result.gistId && result.gistId !== config.gist.gistId) {
+          await this.controller.setBackupConfig({
+            ...config,
+            gist: { ...config.gist, gistId: result.gistId },
+          });
+        }
+      }
+
+      await this.controller.touchAutoBackup(new Date().toISOString());
+      logger.info('[backup] auto backup success');
+      return { ok: true, backup };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error('[backup] auto backup failed:', msg);
+      return { ok: false, error: msg };
+    }
+  }
+
+  /**
+   * 拉取插件市场源数据
+   * 使用 Electron net 模块绕过渲染层 CORS；仅允许 https
+   * @param {string} endpoint 归一化后的 /plugins.json 完整 URL
+   * @returns {Promise<object>}
+   */
+  async fetchPluginMarket(endpoint) {
+    return await new Promise((resolve, reject) => {
+      const request = net.request({
+        method: 'GET',
+        url: endpoint,
+        redirect: 'follow',
+      });
+      request.setHeader('Accept', 'application/json');
+      let body = '';
+      let responded = false;
+      const timer = setTimeout(() => {
+        if (responded) return;
+        responded = true;
+        request.abort();
+        reject(new Error('插件市场源响应超时（10s）'));
+      }, 10000);
+      request.on('response', (response) => {
+        const status = response.statusCode || 0;
+        if (status < 200 || status >= 300) {
+          responded = true;
+          clearTimeout(timer);
+          reject(new Error(`插件市场源返回 HTTP ${status}`));
+          return;
+        }
+        response.on('data', (chunk) => { body += chunk.toString(); });
+        response.on('end', () => {
+          if (responded) return;
+          responded = true;
+          clearTimeout(timer);
+          try {
+            const data = JSON.parse(body);
+            resolve(data);
+          } catch (error) {
+            reject(new Error(`插件市场源返回的内容不是合法 JSON：${error.message}`));
+          }
+        });
+      });
+      request.on('error', (error) => {
+        if (responded) return;
+        responded = true;
+        clearTimeout(timer);
+        reject(new Error(`无法访问插件市场源：${error.message}`));
+      });
+      request.end();
+    });
+  }
+
+  /**
+   * 执行 dsh plugin --profile <name> add <ref> 安装命令
+   * 使用内置 Node + 当前选中版本的 dsh CLI，shell=false，参数按数组传递避免注入
+   * 实时把 stdout/stderr 按行推送给渲染层
+   * @param {string} rawCommand
+   * @param {Electron.WebContents} sender
+   * @returns {Promise<{ ok: true, profile: string, ref: string }>}
+   */
+  async runPluginInstall(rawCommand, sender) {
+    const { profile, ref } = parsePluginCommand(rawCommand);
+    if (!this.controller) throw new Error('控制器尚未初始化');
+    const selected = this.controller.state.selectedVersion;
+    if (!selected) throw new Error('请先安装并选择一个 DEEPSEEK HARNESS 版本');
+    const resolved = await this.controller.versions.resolve(selected);
+    const runtime = this.controller.runtime;
+    if (!runtime?.node) throw new Error('内置 Node.js 运行环境不可用');
+
+    const send = (level, line) => {
+      if (sender && !sender.isDestroyed()) {
+        sender.send(channels.pluginProgress, { level, line, ts: Date.now() });
+      }
+    };
+
+    const env = this.controller.supervisor.buildChildEnv();
+    send('info', `$ dsh plugin --profile ${profile} add ${ref}`);
+    await this.spawnDshCli(resolved, ['plugin', '--profile', profile, 'add', ref], env, send);
+    return { ok: true, profile, ref };
+  }
+
+  /**
+   * DSH 版本安装成功后，默认安装 dshmarket 插件到 web profile
+   * 静默执行：失败仅记录日志，不影响主流程；插件已存在视为成功
+   * @param {string} version 刚安装的 DSH 版本
+   * @param {boolean} isFirstInstall 是否为首次安装（之前无 selectedVersion）
+   */
+  async installDefaultPlugin(version, isFirstInstall) {
+    const DEFAULT_PROFILE = 'web';
+    const DEFAULT_PLUGIN_REF = 'dshmarket';
+    try {
+      if (!this.controller) return;
+      const selected = this.controller.state.selectedVersion;
+      if (!selected) {
+        logger.info('[default-plugin] skip: no selected version');
+        return;
+      }
+      const resolved = await this.controller.versions.resolve(selected);
+      const runtime = this.controller.runtime;
+      if (!runtime?.node) {
+        logger.info('[default-plugin] skip: runtime node unavailable');
+        return;
+      }
+      const env = this.controller.supervisor.buildChildEnv();
+      const send = (level, line) => {
+        logger.info(`[default-plugin] ${level}: ${line}`);
+      };
+      send('info', `开始安装默认插件 ${DEFAULT_PLUGIN_REF} 到 profile ${DEFAULT_PROFILE}`);
+      const result = await this.spawnDshCli(
+        resolved,
+        ['plugin', '--profile', DEFAULT_PROFILE, 'add', DEFAULT_PLUGIN_REF],
+        env,
+        send,
+        { capture: true }
+      );
+      if (result.exitCode === 0) {
+        send('success', `默认插件 ${DEFAULT_PLUGIN_REF} 安装完成`);
+      } else {
+        // 非零退出码：可能是已存在，视为成功
+        const tail = (result.stderr || '').trim().slice(-300);
+        send('info', `默认插件 ${DEFAULT_PLUGIN_REF} 安装返回退出码 ${result.exitCode}（可能已安装）${tail ? `：${tail}` : ''}`);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`[default-plugin] 安装 ${DEFAULT_PLUGIN_REF} 失败：${msg}`);
+    }
+  }
+
+  /**
+   * 执行任意 dsh 子命令（如 dsh plugin list、dsh --version、dsh plugin --profile X remove Y）
+   * 通过 parseDshCommand 进行白名单校验；执行时 shell=false
+   * @param {string} rawCommand
+   * @param {Electron.WebContents} sender
+   * @returns {Promise<{ ok: true, argv: string[], exitCode: number | null, stdout: string, stderr: string }>}
+   */
+  async runPluginCommand(rawCommand, sender) {
+    const argv = parseDshCommand(rawCommand);
+    // 去掉 dsh 前缀，剩下的参数透传给 dsh CLI 入口
+    const subArgs = argv.slice(1);
+    if (!this.controller) throw new Error('控制器尚未初始化');
+    const selected = this.controller.state.selectedVersion;
+    if (!selected) throw new Error('请先安装并选择一个 DEEPSEEK HARNESS 版本');
+    const resolved = await this.controller.versions.resolve(selected);
+    const runtime = this.controller.runtime;
+    if (!runtime?.node) throw new Error('内置 Node.js 运行环境不可用');
+
+    const send = (level, line) => {
+      if (sender && !sender.isDestroyed()) {
+        sender.send(channels.pluginProgress, { level, line, ts: Date.now() });
+      }
+    };
+
+    const env = this.controller.supervisor.buildChildEnv();
+    send('info', `$ dsh ${subArgs.join(' ')}`);
+    const { exitCode, stdout, stderr } = await this.spawnDshCli(resolved, subArgs, env, send, { capture: true });
+    if (exitCode === 0) send('success', '命令执行完成');
+    else send('error', `命令执行失败（退出码 ${exitCode ?? 'unknown'}）`);
+    return { ok: true, argv, exitCode, stdout, stderr };
+  }
+
+  /**
+   * 共享的 dsh CLI 进程执行器：负责 spawn + 行级流推送 + 退出码处理
+   * @param {{ entry: string, root: string }} resolved
+   * @param {string[]} args
+   * @param {NodeJS.ProcessEnv} env
+   * @param {(level: string, line: string) => void} send
+   * @param {{ capture?: boolean }} [options]
+   * @returns {Promise<{ exitCode: number | null, stdout: string, stderr: string }>}
+   */
+  spawnDshCli(resolved, args, env, send, options = {}) {
+    const { capture = false } = options;
+    const runtime = this.controller?.runtime;
+    if (!runtime?.node) return Promise.reject(new Error('内置 Node.js 运行环境不可用'));
+    return new Promise((resolve, reject) => {
+      const child = spawn(runtime.node, [resolved.entry, ...args], {
+        cwd: resolved.root,
+        env,
+        shell: false,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const finish = (err, payload) => {
+        if (settled) return;
+        settled = true;
+        if (err) reject(err);
+        else resolve(payload);
+      };
+      const onLine = (level) => (chunk) => {
+        const text = chunk.toString();
+        if (capture) {
+          if (level === 'stdout') stdout += text;
+          else stderr += text;
+        }
+        const lines = text.split(/\r?\n/);
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed) send(level, trimmed);
+        }
+      };
+      child.stdout.setEncoding('utf8').on('data', onLine('stdout'));
+      child.stderr.setEncoding('utf8').on('data', onLine('stderr'));
+      child.once('error', (error) => {
+        send('error', `进程启动失败：${error.message}`);
+        finish(error);
+      });
+      child.once('exit', (code) => {
+        if (code === 0) {
+          finish(null, { exitCode: code, stdout, stderr });
+        } else {
+          const tail = stderr.trim().slice(-500);
+          send('error', `进程退出码 ${code ?? 'unknown'}${tail ? `：${tail}` : ''}`);
+          finish(new Error(`进程退出码 ${code ?? 'unknown'}`));
+        }
+      });
+    });
   }
 
   /**
@@ -560,8 +1006,11 @@ class DshManager {
       }
     });
     window.webContents.on('will-navigate', (event, rawUrl) => {
-      let actionName = '';
-      try { actionName = new URL(rawUrl).hostname; } catch { return; }
+      let url;
+      try { url = new URL(rawUrl); } catch { return; }
+      // 使用 https 可导航地址触发 will-navigate（自定义外部协议 dsh-update:// 不会触发该事件）
+      if (url.hostname !== 'dsh-popover.local') return;
+      const actionName = url.pathname.replace(/^\/+/, '');
       if (!['open-update', 'dismiss-update'].includes(actionName)) return;
       event.preventDefault();
       if (actionName === 'dismiss-update') {
@@ -576,7 +1025,7 @@ class DshManager {
       this.positionDshUpdatePopover();
       window.showInactive();
     });
-    const html = `<!doctype html><html lang="${snapshot.locale === 'zh-CN' ? 'zh-CN' : 'en'}"><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{padding:8px}.card{box-sizing:border-box;height:60px;border:1px solid #d9dde3;border-radius:10px;background:#fff;box-shadow:0 6px 18px rgba(20,28,38,.12);color:#20242b;padding:0 43px 0 14px;display:flex;align-items:center;gap:10px;position:relative}.dot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#3b82f6}.title{font-size:13px;font-weight:600;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.action{flex:0 0 auto;border-radius:6px;background:#2563eb;color:#fff;padding:5px 9px;font-size:12px;font-weight:650;line-height:16px;text-decoration:none}.action:hover{background:#1d4ed8}.close{position:absolute;right:10px;top:18px;width:18px;height:18px;border-radius:5px;color:#8b949e;text-align:center;line-height:16px;font-size:18px;text-decoration:none}.close:hover{background:#f1f3f5;color:#30363d}</style></head><body><div class="card"><span class="dot"></span><div class="title">${title}</div><a class="action" href="dsh-update://open-update">${action}</a><a class="close" href="dsh-update://dismiss-update" aria-label="Close">×</a></div></body></html>`;
+    const html = `<!doctype html><html lang="${snapshot.locale === 'zh-CN' ? 'zh-CN' : 'en'}"><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{padding:8px}.card{box-sizing:border-box;height:60px;border:1px solid #d9dde3;border-radius:10px;background:#fff;box-shadow:0 6px 18px rgba(20,28,38,.12);color:#20242b;padding:0 43px 0 14px;display:flex;align-items:center;gap:10px;position:relative}.dot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#3b82f6}.title{font-size:13px;font-weight:600;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.action{flex:0 0 auto;border-radius:6px;background:#2563eb;color:#fff;padding:5px 9px;font-size:12px;font-weight:650;line-height:16px;text-decoration:none}.action:hover{background:#1d4ed8}.close{position:absolute;right:10px;top:18px;width:18px;height:18px;border-radius:5px;color:#8b949e;text-align:center;line-height:16px;font-size:18px;text-decoration:none}.close:hover{background:#f1f3f5;color:#30363d}</style></head><body><div class="card"><span class="dot"></span><div class="title">${title}</div><a class="action" href="https://dsh-popover.local/open-update">${action}</a><a class="close" href="https://dsh-popover.local/dismiss-update" aria-label="Close">×</a></div></body></html>`;
     void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   }
 
@@ -723,8 +1172,8 @@ class DshManager {
     const template = [
       ...(process.platform === 'darwin' ? [{
         label: APP_NAME,
-        submenu: [about, { type: 'separator' }, quickUpdateInDsh, openVersions, checkUpdates, this.languageMenu(copy), { type: 'separator' }, { role: 'hide', label: copy.hide }, { role: 'hideOthers', label: copy.hideOthers }, { type: 'separator' }, { role: 'quit', label: copy.quit }]
-      }] : [{ label: APP_NAME, submenu: [about, { type: 'separator' }, quickUpdateInDsh, openVersions, checkUpdates, this.languageMenu(copy), { type: 'separator' }, { role: 'quit', label: copy.quit }] }]),
+        submenu: [about, { type: 'separator' },  openVersions, checkUpdates, this.languageMenu(copy), { type: 'separator' }, { role: 'hide', label: copy.hide }, { role: 'hideOthers', label: copy.hideOthers }, { type: 'separator' }, { role: 'quit', label: copy.quit }]
+      }] : [{ label: APP_NAME, submenu: [about, { type: 'separator' },   openVersions, checkUpdates, this.languageMenu(copy), { type: 'separator' }, { role: 'quit', label: copy.quit }] }]),
       { label: copy.edit, submenu: [{ role: 'undo', label: copy.undo }, { role: 'redo', label: copy.redo }, { type: 'separator' }, { role: 'cut', label: copy.cut }, { role: 'copy', label: copy.copy }, { role: 'paste', label: copy.paste }, { role: 'selectAll', label: copy.selectAll }] },
       { label: copy.window, submenu: [{ role: 'minimize', label: copy.minimize }, { role: 'zoom', label: copy.zoom }] }
     ];

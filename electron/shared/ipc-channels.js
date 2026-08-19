@@ -24,7 +24,28 @@ const channels = {
   appUpdateCheck: 'desktop-update:check',
   appUpdateDownload: 'desktop-update:download',
   appUpdateInstall: 'desktop-update:install',
-  appUpdateChanged: 'desktop-update:changed'
+  appUpdateChanged: 'desktop-update:changed',
+  // 插件市场通道
+  pluginInstall: 'dsh:plugin-install',
+  pluginProgress: 'dsh:plugin-progress',
+  readClipboard: 'dsh:read-clipboard',
+  writeClipboard: 'dsh:write-clipboard',
+  pluginMarketFetch: 'dsh:plugin-market-fetch',
+  pluginRunCommand: 'dsh:plugin-run-command',
+  pluginSourcesSet: 'dsh:plugin-sources-set',
+  // 备份与恢复通道
+  backupExport: 'dsh:backup-export',
+  backupImport: 'dsh:backup-import',
+  backupLocalSave: 'dsh:backup-local-save',
+  backupLocalLoad: 'dsh:backup-local-load',
+  backupConfigSet: 'dsh:backup-config-set',
+  backupWebdavTest: 'dsh:backup-webdav-test',
+  backupWebdavPush: 'dsh:backup-webdav-push',
+  backupWebdavPull: 'dsh:backup-webdav-pull',
+  backupGistTest: 'dsh:backup-gist-test',
+  backupGistPush: 'dsh:backup-gist-push',
+  backupGistPull: 'dsh:backup-gist-pull',
+  backupAutoRun: 'dsh:backup-auto-run'
 };
 
 module.exports = {
