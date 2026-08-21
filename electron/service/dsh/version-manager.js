@@ -106,6 +106,23 @@ class VersionManager {
   }
 
   /**
+   * 卸载用户安装的指定版本
+   * 仅允许卸载 source === 'installed' 的版本，bundled 版本不可卸载
+   * 卸载当前选中版本时由调用方负责切换到其他版本
+   * @param {string} version
+   */
+  async uninstall(version) {
+    parseExactVersion(version);
+    const destination = path.join(this.versionsDir, version);
+    if (!existsSync(destination)) {
+      throw new Error('该版本未安装');
+    }
+    // 确认该目录确实是用户安装版本（而非 bundled）
+    await this.resolveAt(destination, version, 'installed');
+    await rm(destination, { recursive: true, force: true });
+  }
+
+  /**
    * 使用内置 node 执行 npm install
    * 强制 shell: false，注入代理环境变量
    * --prefer-online：避免本地缓存陈旧导致 ETARGET

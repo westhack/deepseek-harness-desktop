@@ -1,15 +1,60 @@
 :root {
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-  color: #1f2937;
-  background: #f0f4ff;
   font-synthesis: none;
   --indigo: #6366f1;
   --indigo-light: #818cf8;
+  --danger: #dc2626;
+}
+
+/* ===== 浅色主题（默认） ===== */
+:root,
+.light-theme {
+  color: #1f2937;
+  background: #f0f4ff;
   --ink: #1e1b4b;
   --muted: #6b7280;
   --paper: #fff;
   --line: #e5e7eb;
-  --danger: #dc2626;
+  --bg: #f0f4ff;
+  --bg-gradient: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 50%, #f5f0ff 100%);
+  --surface: #ffffff;
+  --surface-soft: #f8faff;
+  --surface-glass: rgba(255, 255, 255, 0.85);
+  --border: rgba(99, 102, 241, 0.1);
+  --border-strong: #e5e7eb;
+  --text: #1e1b4b;
+  --text-body: #1f2937;
+  --text-muted: #6b7280;
+  --shadow: rgba(99, 102, 241, 0.06);
+  --chip-bg: #ffffff;
+  --chip-text: #4b5563;
+  --code-bg: #f6f7fb;
+  --input-bg: #ffffff;
+}
+
+/* ===== 深色主题 ===== */
+.dark-theme {
+  color: #cbd5e1;
+  background: #0f172a;
+  --ink: #e2e8f0;
+  --muted: #94a3b8;
+  --paper: #1e293b;
+  --line: #334155;
+  --bg: #0f172a;
+  --bg-gradient: linear-gradient(135deg, #0f172a 0%, #111a33 50%, #14112a 100%);
+  --surface: #1e293b;
+  --surface-soft: #182236;
+  --surface-glass: rgba(30, 41, 59, 0.85);
+  --border: rgba(148, 163, 184, 0.15);
+  --border-strong: #334155;
+  --text: #e2e8f0;
+  --text-body: #cbd5e1;
+  --text-muted: #94a3b8;
+  --shadow: rgba(0, 0, 0, 0.35);
+  --chip-bg: #243248;
+  --chip-text: #cbd5e1;
+  --code-bg: #111827;
+  --input-bg: #1e293b;
 }
 
 * {
@@ -21,7 +66,13 @@ html, body {
   padding: 0;
   min-width: 720px;
   min-height: 100vh;
-  background: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 50%, #f5f0ff 100%);
+  background: var(--bg);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+body {
+  background: var(--bg-gradient);
+  color: var(--text-body);
 }
 
 button, input {

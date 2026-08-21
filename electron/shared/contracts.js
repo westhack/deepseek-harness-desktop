@@ -9,6 +9,7 @@ const bundledDshVersion = '0.1.0-rc.6';
 const VERSION_REGEX = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/;
 const LOCALE_PREFERENCES = ['system', 'zh-CN', 'en-US'];
 const REGISTRY_PREFERENCES = ['official', 'npmmirror'];
+const THEME_PREFERENCES = ['system', 'light', 'dark'];
 
 // 插件安装命令：dsh plugin --profile <name> add <ref>
 // profile 限定字母数字下划线短横线；ref 不含空白和 shell 元字符
@@ -92,6 +93,18 @@ function resolveRegistryUrl(preference) {
 }
 
 /**
+ * 校验主题偏好
+ * @param {unknown} value
+ * @returns {'system' | 'light' | 'dark'}
+ */
+function parseThemePreference(value) {
+  if (typeof value !== 'string' || !THEME_PREFERENCES.includes(value)) {
+    throw new Error('主题偏好无效');
+  }
+  return value;
+}
+
+/**
  * 校验插件市场源 URL，归一化为 /plugins.json 端点
  * 仅接受 https；末尾无 /plugins.json 时自动补全
  * @param {unknown} value
@@ -165,9 +178,11 @@ module.exports = {
   resolveLocale,
   parseRegistryPreference,
   resolveRegistryUrl,
+  parseThemePreference,
   parsePluginCommand,
   normalizePluginSource,
   parseDshCommand,
   LOCALE_PREFERENCES,
-  REGISTRY_PREFERENCES
+  REGISTRY_PREFERENCES,
+  THEME_PREFERENCES
 };

@@ -28,6 +28,12 @@ DeepSeek Harness Desktop 是一款基于 **Electron 39 + Vue 3 + Naive UI** 技�
 
 <img src="./public/images/DeepSeek-Harness.png">
 
+<img src="./preview/dsh2.png">
+
+<img src="./preview/dsh3.png">
+
+<img src="./preview/dsh1.png">
+
 ## 核心特性
 
 ### 运行时托管

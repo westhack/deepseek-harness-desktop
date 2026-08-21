@@ -41,6 +41,20 @@
               {{ registryLabel }}
             </n-button>
           </n-dropdown>
+          <n-dropdown
+            trigger="click"
+            :options="themeOptions"
+            :value="snapshot.themePreference || 'system'"
+            size="small"
+            @select="changeTheme"
+          >
+            <n-button quaternary size="small" :title="language.themeLabel">
+              <template #icon>
+                <n-icon><MoonIcon v-if="isDarkTheme" /><SunIcon v-else /></n-icon>
+              </template>
+              {{ themeLabel }}
+            </n-button>
+          </n-dropdown>
           <n-button
             quaternary
             size="small"
@@ -186,6 +200,20 @@
               <n-tag v-if="snapshot.selectedVersion === item.version" size="tiny" type="info" :bordered="false" round>{{ language.current }}</n-tag>
               <n-tag v-if="item.installed" size="tiny" :bordered="false" round>{{ language.installed }}</n-tag>
               <n-tag v-if="snapshot.latestVersion === item.version" size="tiny" type="warning" :bordered="false" round>{{ language.latest }}</n-tag>
+              <n-button
+                v-if="item.installed && item.source !== 'bundled' && snapshot.selectedVersion !== item.version"
+                class="card-uninstall"
+                size="tiny"
+                quaternary
+                type="error"
+                :disabled="busyAction !== null"
+                :loading="busyAction === `uninstall:${item.version}`"
+                :title="language.uninstall"
+                @click="confirmUninstallVersion(item.version)"
+              >
+                <template #icon><n-icon><TrashIcon /></n-icon></template>
+                {{ language.uninstall }}
+              </n-button>
             </div>
             <div class="card-meta">
               <span>{{ formatDate(item.publishedAt) }}</span>
@@ -201,17 +229,18 @@
                 <template #icon><n-icon><CheckIcon /></n-icon></template>
                 {{ language.inUse }}
               </n-button>
-              <n-button
-                v-else-if="item.installed"
-                size="small"
-                secondary
-                block
-                :disabled="busyAction !== null"
-                :loading="busyAction === `switch:${item.version}`"
-                @click="perform(`switch:${item.version}`, language.switchingTo(item.version), () => api.select(item.version))"
-              >
-                {{ language.switch }}
-              </n-button>
+              <template v-else-if="item.installed">
+                <n-button
+                  size="small"
+                  secondary
+                  block
+                  :disabled="busyAction !== null"
+                  :loading="busyAction === `switch:${item.version}`"
+                  @click="perform(`switch:${item.version}`, language.switchingTo(item.version), () => api.select(item.version))"
+                >
+                  {{ language.switch }}
+                </n-button>
+              </template>
               <n-button
                 v-else
                 size="small"
@@ -223,7 +252,14 @@
                 @click="perform(`install:${item.version}`, language.installingVersion(item.version), () => api.install(item.version))"
               >
                 <template #icon><n-icon><DownloadIcon /></n-icon></template>
-                {{ busyAction === `install:${item.version}` && progress ? progressLabel : language.install }}
+                <span
+                  v-if="busyAction === `install:${item.version}` && progress"
+                  class="install-progress-label"
+                  :title="installProgressLabel"
+                >
+                  {{ installProgressLabel }}
+                </span>
+                <span v-else>{{ language.install }}</span>
               </n-button>
             </div>
           </div>
@@ -305,7 +341,7 @@
 
             <div class="market-meta" v-if="pluginMarket">
               <span class="meta-item">
-                <n-tag size="small" round :bordered="false" type="info">{{ pluginMarket.name || '—' }}</n-tag>
+                <n-tag size="small" round :bordered="false" type="info">{{ pluginMarket.name || 'Unknown' }}</n-tag>
               </span>
               <span class="meta-item" v-if="pluginMarket.count != null">
                 {{ pluginMarket.count }} {{ language.pluginMetaCount }}
@@ -315,15 +351,24 @@
               </span>
             </div>
 
-            <n-input
-              v-model:value="pluginSearch"
-              size="small"
-              :placeholder="language.pluginSearchPlaceholder"
-              clearable
-              class="market-search"
-            >
-              <template #prefix><n-icon><SearchIcon /></n-icon></template>
-            </n-input>
+            <div class="market-search-row">
+              <n-input
+                v-model:value="pluginSearch"
+                size="small"
+                :placeholder="language.pluginSearchPlaceholder"
+                clearable
+                class="market-search"
+              >
+                <template #prefix><n-icon><SearchIcon /></n-icon></template>
+              </n-input>
+              <n-select
+                v-model:value="pluginSort"
+                :options="pluginSortOptions"
+                size="small"
+                class="market-sort"
+                :disabled="pluginLoading"
+              />
+            </div>
 
             <div class="category-row">
               <button
@@ -401,6 +446,15 @@
                               {{ tag }}
                             </n-tag>
                             <div class="plugin-actions">
+                              <n-button
+                                v-if="pluginPageUrl(plugin)"
+                                size="tiny"
+                                quaternary
+                                @click="openPluginPage(plugin)"
+                              >
+                                <template #icon><n-icon><OpenIcon /></n-icon></template>
+                                {{ language.pluginOpenPage }}
+                              </n-button>
                               <n-button size="tiny" quaternary @click="copyInstall(plugin)">
                                 <template #icon><n-icon><ClipboardIcon /></n-icon></template>
                                 {{ language.pluginCopyCmd }}
@@ -502,8 +556,9 @@
                         <n-button
                           size="tiny"
                           quaternary
-                          @click="gotoUninstall(item)"
+                          :loading="pluginBusy"
                           :disabled="pluginBusy"
+                          @click="onUninstallPlugin(item)"
                         >
                           {{ language.pluginInstalledRemove }}
                         </n-button>
@@ -661,6 +716,19 @@
                 <div class="diag-sub">{{ language.pluginDiagnosticSub }}</div>
               </div>
             </div>
+            <div class="preset-row">
+              <span class="preset-title">{{ language.commandPresetTitle }}</span>
+              <button
+                v-for="preset in presetCommands"
+                :key="preset.command"
+                type="button"
+                class="preset-chip"
+                :disabled="pluginBusy || !hasSelectedVersion"
+                @click="runPreset(preset.command)"
+              >
+                {{ preset.label }}
+              </button>
+            </div>
             <div class="command-row">
               <n-input
                 v-model:value="pluginCommand"
@@ -681,6 +749,15 @@
                 <n-button size="small" quaternary :disabled="pluginBusy" @click="clearPluginLog">
                   <template #icon><n-icon><TrashIcon /></n-icon></template>
                   {{ language.pluginCommandClear }}
+                </n-button>
+                <n-button
+                  size="small"
+                  type="error"
+                  :loading="pluginTerminating"
+                  :disabled="pluginBusy === null || !pluginBusy"
+                  @click="terminateCommand"
+                >
+                  {{ language.pluginCommandTerminate }}
                 </n-button>
                 <n-button
                   size="small"
@@ -767,7 +844,80 @@
         <div class="source-modal-footer">
           <n-button size="small" @click="showSourceModal = false">{{ language.pluginSourceCancel }}</n-button>
           <n-button size="small" type="primary" :loading="sourceSaving" @click="saveSources">
-            {{ language.pluginSourceSave }}
+            {{ language.pluginSourceSave }}</n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- 卸载确认弹窗 -->
+    <n-modal
+      v-model:show="showUninstallConfirm"
+      preset="dialog"
+      :title="language.pluginUninstallConfirmTitle"
+      :mask-closable="!pluginBusy"
+      :close-on-esc="!pluginBusy"
+      :show-icon="true"
+      type="warning"
+      :bordered="false"
+      style="max-width: 420px"
+    >
+      <div class="uninstall-confirm-body">
+        <div class="uninstall-confirm-text">
+          {{ language.pluginUninstallConfirmContent(uninstallTarget?.name || '') }}
+        </div>
+        <div class="uninstall-confirm-tip">
+          {{ language.pluginInstalledRestartHint }}
+        </div>
+      </div>
+      <template #action>
+        <div class="uninstall-confirm-actions">
+          <n-button :disabled="pluginBusy" @click="showUninstallConfirm = false">
+            {{ language.pluginUninstallConfirmCancel }}
+          </n-button>
+          <n-button
+            type="error"
+            :loading="pluginBusy"
+            :disabled="pluginBusy || !uninstallTarget"
+            @click="uninstallInstalledPlugin"
+          >
+            {{ language.pluginUninstallConfirmOk }}
+          </n-button>
+        </div>
+      </template>
+    </n-modal>
+
+    <!-- 版本卸载确认弹窗 -->
+    <n-modal
+      v-model:show="showVersionUninstallConfirm"
+      preset="dialog"
+      :title="language.versionUninstallConfirmTitle"
+      :mask-closable="busyAction === null"
+      :close-on-esc="busyAction === null"
+      :show-icon="true"
+      type="warning"
+      :bordered="false"
+      style="max-width: 420px"
+    >
+      <div class="uninstall-confirm-body">
+        <div class="uninstall-confirm-text">
+          {{ language.versionUninstallConfirmContent(versionUninstallTarget) }}
+        </div>
+        <div class="uninstall-confirm-tip">
+          {{ language.versionUninstallConfirmTip }}
+        </div>
+      </div>
+      <template #action>
+        <div class="uninstall-confirm-actions">
+          <n-button :disabled="busyAction !== null" @click="showVersionUninstallConfirm = false">
+            {{ language.versionUninstallConfirmCancel }}
+          </n-button>
+          <n-button
+            type="error"
+            :loading="busyAction !== null && busyAction.startsWith('uninstall:')"
+            :disabled="busyAction !== null || !versionUninstallTarget"
+            @click="confirmVersionUninstall"
+          >
+            {{ language.versionUninstallConfirmOk }}
           </n-button>
         </div>
       </template>
@@ -829,6 +979,8 @@ const selectedSourceId = ref('');
 const showSourceModal = ref(false);
 const sourceSaving = ref(false);
 const editingSources = ref([]);
+const showUninstallConfirm = ref(false);
+const uninstallTarget = ref(null);
 
 const selectedSource = computed(() =>
   pluginSources.value.find((s) => s.id === selectedSourceId.value) || pluginSources.value.find((s) => s.isDefault) || pluginSources.value[0] || null
@@ -848,6 +1000,7 @@ function onSourceChange(id) {
   if (src) {
     pluginCategory.value = '__all';
     pluginSearch.value = '';
+    pluginSort.value = 'default';
     void loadPlugins();
   }
 }
@@ -942,9 +1095,11 @@ const pluginCommand = ref('');
 const pluginLog = ref([]);
 const pluginBusy = ref(false);
 const pluginLoading = ref(false);
+const pluginTerminating = ref(false);
 const pluginMarket = ref(null);
 const pluginSearch = ref('');
 const pluginCategory = ref('__all');
+const pluginSort = ref('default');
 const detectedCommand = ref(null);
 const dismissedCommands = new Set();
 const logBody = ref(null);
@@ -1199,20 +1354,8 @@ async function backupRunAuto() {
   }
 }
 
-// 预定义的分类 chip（显示在分类行；按 key 与市场数据 categories 关联）
-const CATEGORY_CHIP_DEFS = [
-  { value: '__all', labelKey: 'pluginCategoryAll', staticKey: null },
-  { value: 'ui', labelKey: null, labelZh: 'UI 增强', labelEn: 'UI Enhancement' },
-  { value: 'theme', labelKey: null, labelZh: '主题与外观', labelEn: 'Themes & Appearance' },
-  { value: 'model', labelKey: null, labelZh: '模型与账号接入', labelEn: 'Models & Accounts' },
-  { value: 'chat', labelKey: null, labelZh: '会话与消息', labelEn: 'Chat & Messages' },
-  { value: 'memory', labelKey: null, labelZh: '记忆', labelEn: 'Memory' },
-  { value: 'tools', labelKey: null, labelZh: '工具与能力', labelEn: 'Tools & Skills' },
-  { value: 'skill', labelKey: null, labelZh: '技能包', labelEn: 'Skill Packs' },
-  { value: 'workflow', labelKey: null, labelZh: '工作流与自动化', labelEn: 'Workflow & Automation' },
-  { value: 'notify', labelKey: null, labelZh: '通知与集成', labelEn: 'Notifications & Integration' }
-];
-const CATEGORY_VISIBLE_LIMIT = 6;
+// 分类 chip：完全从接口返回的 categories 动态生成
+const CATEGORY_VISIBLE_LIMIT = 10;
 
 const canRunCommand = computed(() => DSH_COMMAND_REGEX.test(pluginCommand.value.trim()) && DSH_TOKEN_REGEX_WHOLE(pluginCommand.value.trim()));
 const hasSelectedVersion = computed(() => Boolean(snapshot.value.selectedVersion));
@@ -1248,20 +1391,16 @@ function DSH_TOKEN_REGEX_WHOLE(value) {
   return tokens.length > 0;
 }
 
+// 从接口返回的 categories 动态生成分类 chip 列表
 const categoryChipDefs = computed(() => {
-  return CATEGORY_CHIP_DEFS.map((def) => {
-    let label;
-    if (def.labelKey) label = language.value[def.labelKey];
-    else label = isZh.value ? def.labelZh : def.labelEn;
-    // 如果市场数据里有同名分类且包含相同 key，用市场里的本地化文案
-    if (def.value !== '__all') {
-      const meta = pluginMarket.value?.categories?.[def.value];
-      if (meta) {
-        label = (isZh.value ? meta.zh : meta.en) || label;
-      }
-    }
-    return { value: def.value, label };
-  });
+  const cats = pluginMarket.value?.categories || {};
+  const defs = [{ value: '__all', label: language.value.pluginCategoryAll }];
+  for (const [key, meta] of Object.entries(cats)) {
+    if (!meta) continue;
+    const label = (isZh.value ? meta.zh : meta.en) || key;
+    defs.push({ value: key, label });
+  }
+  return defs;
 });
 
 const visibleCategoryChips = computed(() => {
@@ -1285,6 +1424,13 @@ function handleOverflowCategory(value) {
   pluginCategory.value = value;
 }
 
+const pluginSortOptions = computed(() => [
+  { label: language.value.pluginSortDefault, value: 'default' },
+  { label: language.value.pluginSortPopular, value: 'popular' },
+  { label: language.value.pluginSortLatest, value: 'latest' },
+  { label: language.value.pluginSortRecommended, value: 'recommended' },
+]);
+
 const filteredPlugins = computed(() => {
   const list = pluginMarket.value?.plugins || [];
   const q = pluginSearch.value.trim().toLowerCase();
@@ -1293,7 +1439,7 @@ const filteredPlugins = computed(() => {
   if (pluginSubView.value === 'themes' && !['__all', 'theme', 'ui'].includes(activeCategory)) {
     activeCategory = '__all';
   }
-  return list.filter((p) => {
+  const filtered = list.filter((p) => {
     if (activeCategory !== '__all') {
       // 主题页对 category 为 theme/themes 的也命中
       if (pluginSubView.value === 'themes' && activeCategory === 'theme') {
@@ -1303,10 +1449,34 @@ const filteredPlugins = computed(() => {
       }
     }
     if (!q) return true;
-    const hay = [p.name, p.owner, p.npm, p.description?.zh, p.description?.en, p.install]
+    const hay = [p.name, p.owner, p.npm, p.description?.zh, p.description?.en, p.install, ...(p.tags || [])]
       .filter(Boolean).join(' ').toLowerCase();
     return hay.includes(q);
   });
+  // 排序：默认保持市场源返回的原始顺序
+  const result = [...filtered];
+  switch (pluginSort.value) {
+    case 'popular':
+      result.sort((a, b) => (b.stars ?? 0) - (a.stars ?? 0) || String(a.name).localeCompare(String(b.name)));
+      break;
+    case 'latest': {
+      const ts = (p) => {
+        const raw = p.publishedAt || p.updated || p.date;
+        if (!raw) return 0;
+        const t = new Date(raw).getTime();
+        return Number.isFinite(t) ? t : 0;
+      };
+      result.sort((a, b) => ts(b) - ts(a) || String(a.name).localeCompare(String(b.name)));
+      break;
+    }
+    case 'recommended': {
+      const score = (p) => (p.installs ?? p.downloads ?? 0) * 1 + (p.stars ?? 0) * 0.5;
+      result.sort((a, b) => score(b) - score(a) || String(a.name).localeCompare(String(b.name)));
+      break;
+    }
+    // default：保持原始顺序
+  }
+  return result;
 });
 
 function pluginKey(p) {
@@ -1338,10 +1508,17 @@ function pluginCategoryLabel(p) {
   const cats = pluginMarket.value?.categories || {};
   const meta = cats[p.category];
   if (meta) return (isZh.value ? meta.zh : meta.en) || p.category || '';
-  // 退化到 chip 定义
-  const def = CATEGORY_CHIP_DEFS.find((c) => c.value === p.category);
-  if (def) return isZh.value ? def.labelZh : def.labelEn;
   return p.category || '';
+}
+
+function pluginPageUrl(p) {
+  const candidates = [p.url, p.page, p.website];
+  return candidates.find((value) => typeof value === 'string' && /^https:\/\//i.test(value.trim()))?.trim() || '';
+}
+
+function openPluginPage(plugin) {
+  const url = pluginPageUrl(plugin);
+  if (url) openExternal(url);
 }
 
 function pluginIcon(p) {
@@ -1389,6 +1566,9 @@ function formatStars(n) {
   return String(n);
 }
 
+const PLUGIN_CACHE_KEY_PREFIX = 'plugin-market-cache:';
+const PLUGIN_CACHE_TTL = 10 * 60 * 1000; // 10 分钟
+
 async function loadPlugins() {
   if (!api?.fetchPluginMarket) return;
   const src = selectedSource.value;
@@ -1396,10 +1576,31 @@ async function loadPlugins() {
   pluginLoading.value = true;
   const token = ++pluginFetchToken;
   try {
+    // 优先使用本地缓存，避免频繁请求
+    const cacheKey = `${PLUGIN_CACHE_KEY_PREFIX}${src.id}`;
+    const cachedRaw = localStorage.getItem(cacheKey);
+    if (cachedRaw) {
+      try {
+        const cached = JSON.parse(cachedRaw);
+        if (cached && cached.data && typeof cached.ts === 'number' && Date.now() - cached.ts < PLUGIN_CACHE_TTL) {
+          if (token !== pluginFetchToken) return;
+          pluginMarket.value = cached.data;
+          return;
+        }
+      } catch {
+        localStorage.removeItem(cacheKey);
+      }
+    }
     const data = await api.fetchPluginMarket(src.endpoint);
     if (token !== pluginFetchToken) return; // 已被新的请求覆盖
     if (!data || typeof data !== 'object') throw new Error('Invalid response');
     pluginMarket.value = data;
+    // 写入缓存
+    try {
+      localStorage.setItem(cacheKey, JSON.stringify({ data, ts: Date.now() }));
+    } catch {
+      // 存储满等异常忽略，不影响主流程
+    }
     // 校验当前分类是否仍在选项中
     if (pluginCategory.value !== '__all' && !data.categories?.[pluginCategory.value]) {
       pluginCategory.value = '__all';
@@ -1538,7 +1739,23 @@ function installedColor(item) {
   return colorFromString(item.name || '');
 }
 
-// ===== 诊断（任意 dsh 命令）=====
+// ===== 命令执行（任意 dsh 命令）=====
+const presetCommands = computed(() => {
+  const l = language.value;
+  return [
+    { label: l.commandPresetVersion, command: 'dsh --version' },
+    { label: l.commandPresetHelp, command: 'dsh --help' },
+    { label: l.commandPresetList, command: 'dsh plugin list' },
+    { label: l.commandPresetListWeb, command: 'dsh plugin --profile web list' },
+    { label: l.commandPresetUpdateAll, command: 'dsh plugin --profile web update' },
+  ];
+});
+
+function runPreset(command) {
+  pluginCommand.value = command;
+  void runDiagnostic();
+}
+
 function onCommandEnter(event) {
   if (event?.shiftKey) return; // Shift+Enter 换行
   void runDiagnostic();
@@ -1589,16 +1806,59 @@ async function runDiagnostic(options = {}) {
   }
 }
 
+async function terminateCommand() {
+  if (!api?.stopPluginCommand) {
+    message?.error?.(language.value.failed);
+    return;
+  }
+  pluginTerminating.value = true;
+  try {
+    const result = await api.stopPluginCommand();
+    if (result?.ok) {
+      message?.success?.(language.value.pluginCommandTerminated);
+    } else {
+      message?.warning?.(result?.message || language.value.failed);
+    }
+  } catch (error) {
+    message?.error?.(error instanceof Error ? error.message : language.value.failed);
+  } finally {
+    pluginTerminating.value = false;
+    pluginBusy.value = false;
+  }
+}
+
 function clearPluginLog() {
   pluginLog.value = [];
 }
 
-function gotoUninstall(item) {
+function onUninstallPlugin(item) {
   if (!item || !item.name) return;
+  uninstallTarget.value = item;
+  showUninstallConfirm.value = true;
+}
+
+// 卸载单个已安装插件
+async function uninstallInstalledPlugin() {
+  const item = uninstallTarget.value;
+  if (!item || !item.name) return;
+  if (!hasSelectedVersion.value) {
+    message?.error?.(language.value.pluginNoVersion);
+    return;
+  }
+  if (!api?.runPluginCommand) {
+    message?.error?.(language.value.pluginUninstallFailed);
+    return;
+  }
   const profile = item.profile || installedProfile.value || 'web';
   const cmd = `dsh plugin --profile ${profile} remove ${item.name}`;
   pluginCommand.value = cmd;
+  // 跳到诊断页展示日志
   pluginSubView.value = 'diagnostic';
+  await runDiagnostic({ silent: false, listMode: false, returnTo: 'installed' });
+  // 卸载完成后自动刷新已安装列表
+  await refreshInstalled();
+  showUninstallConfirm.value = false;
+  uninstallTarget.value = null;
 }
 
 // 更新单个已安装插件
@@ -1685,6 +1945,13 @@ const ClipboardIcon = SvgWrapper([
   h('path', { d: 'M16 4V3a1 1 0 0 0-1-1H7a3 3 0 0 0-3 3v14a3 3 0 0 0 3 3' }),
   h('path', { d: 'M11 7h6' }),
 ]);
+const SunIcon = SvgWrapper([
+  h('circle', { cx: '12', cy: '12', r: '4' }),
+  h('path', { d: 'M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4' }),
+]);
+const MoonIcon = SvgWrapper([
+  h('path', { d: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z' }),
+]);
 const StarIcon = SvgWrapper([
   h('path', { d: 'M12 2.5l2.9 6.1 6.6.9-4.8 4.6 1.2 6.5L12 18.8 6.1 21.6l1.2-6.5L2.5 9.5l6.6-.9z' }),
 ]);
@@ -1759,6 +2026,19 @@ const progressLabel = computed(() => {
   return localizeMessage(snapshot.value.locale, progress.value.message);
 });
 
+const installProgressLabel = computed(() => {
+  const reportedPercent = Number(progress.value?.percent);
+  const phasePercent = {
+    downloading: 60,
+    validating: 90,
+    complete: 100,
+  }[progress.value?.phase];
+  const percent = Number.isFinite(reportedPercent) ? reportedPercent : phasePercent;
+  return Number.isFinite(percent)
+    ? `${language.value.installing}：${Math.round(percent)}%`
+    : language.value.installing;
+});
+
 // ===== 语言切换 =====
 const message = useMessage();
 const localeOptions = computed(() => [
@@ -1785,6 +2065,37 @@ const registryLabel = computed(() => {
     : language.value.officialRegistry;
 });
 
+// ===== 主题切换 =====
+const themeOptions = computed(() => [
+  { label: language.value.themeFollowSystem, key: 'system' },
+  { type: 'divider', key: 'd1' },
+  { label: language.value.themeLight, key: 'light' },
+  { label: language.value.themeDark, key: 'dark' },
+]);
+const themeLabel = computed(() => {
+  const pref = snapshot.value.themePreference || 'system';
+  if (pref === 'light') return language.value.themeLight;
+  if (pref === 'dark') return language.value.themeDark;
+  return language.value.themeFollowSystem;
+});
+const isDarkTheme = computed(() => {
+  const pref = snapshot.value.themePreference || 'system';
+  if (pref === 'dark') return true;
+  if (pref === 'light') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+});
+async function changeTheme(preference) {
+  if (!preference || preference === (snapshot.value.themePreference || 'system')) return;
+  try {
+    const next = await api.setTheme(preference);
+    Object.assign(dshStore.state.snapshot, next);
+    message?.success?.(language.value.themeChanged);
+  } catch (error) {
+    const msg = localizeMessage(snapshot.value.locale, error instanceof Error ? error.message : language.value.themeChangeFailed);
+    message?.error?.(msg);
+  }
+}
+
 // ===== 交互 =====
 async function perform(key, label, action) {
   dshStore.busyAction = key;
@@ -1810,6 +2121,22 @@ async function quickUpdateHarness() {
     : () => api.install(latestVersion.value);
   const busyLabel = isLatestInstalled ? language.value.quickSwitching(latestVersion.value) : language.value.quickInstalling(latestVersion.value);
   await perform(`quick-update-${latestVersion.value}`, busyLabel, action);
+}
+
+const showVersionUninstallConfirm = ref(false);
+const versionUninstallTarget = ref('');
+
+function confirmUninstallVersion(version) {
+  versionUninstallTarget.value = version;
+  showVersionUninstallConfirm.value = true;
+}
+
+async function confirmVersionUninstall() {
+  const version = versionUninstallTarget.value;
+  if (!version) return;
+  await perform(`uninstall:${version}`, language.value.uninstallingVersion(version), () => api.uninstall(version));
+  showVersionUninstallConfirm.value = false;
+  versionUninstallTarget.value = '';
 }
 
 async function performAppUpdate() {
@@ -1995,6 +2322,7 @@ async function runPluginInstall(command) {
   try {
     await api.installPlugin(command);
     message?.success?.(language.value.pluginInstalled);
+    message?.info?.(language.value.pluginInstalledRestartHint, { duration: 5000 });
     detectedCommand.value = null;
   } catch (error) {
     const msg = localizeMessage(snapshot.value.locale, error instanceof Error ? error.message : language.value.pluginInstallFailed);
@@ -2019,15 +2347,16 @@ function formatLogTime(ts) {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  background: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 50%, #f5f0ff 100%);
+  background: var(--bg-gradient);
+  transition: background 0.2s ease;
 }
 
 /* ===== 顶部导航栏 ===== */
 .dsh-header {
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--surface-glass);
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(99, 102, 241, 0.08);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 3px var(--shadow);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -2073,13 +2402,13 @@ function formatLogTime(ts) {
 .brand-title {
   font-size: 16px;
   font-weight: 700;
-  color: #1e1b4b;
+  color: var(--text);
   letter-spacing: -0.02em;
 }
 
 .brand-sub {
   font-size: 11px;
-  color: #6b7280;
+  color: var(--text-muted);
 }
 
 .header-actions {
@@ -2108,9 +2437,9 @@ function formatLogTime(ts) {
   gap: 20px;
   padding: 24px;
   border-radius: 16px;
-  background: linear-gradient(135deg, #ffffff 0%, #f8faff 100%);
-  border: 1px solid rgba(99, 102, 241, 0.1);
-  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.06);
+  background: linear-gradient(135deg, var(--surface) 0%, var(--surface-soft) 100%);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 20px var(--shadow);
 }
 
 .current-left {
@@ -2125,7 +2454,7 @@ function formatLogTime(ts) {
   width: 56px;
   height: 56px;
   border-radius: 14px;
-  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+  background: linear-gradient(135deg, var(--code-bg), var(--surface-soft));
   flex-shrink: 0;
 
   img {
@@ -2144,7 +2473,7 @@ function formatLogTime(ts) {
 .current-label {
   font-size: 11px;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -2158,7 +2487,7 @@ function formatLogTime(ts) {
 .version-number {
   font-size: 22px;
   font-weight: 700;
-  color: #1e1b4b;
+  color: var(--text);
   letter-spacing: -0.03em;
 }
 
@@ -2177,8 +2506,8 @@ function formatLogTime(ts) {
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
-  background: #f3f4f6;
-  color: #6b7280;
+  background: var(--code-bg);
+  color: var(--text-muted);
 
   i {
     width: 6px;
@@ -2214,7 +2543,7 @@ function formatLogTime(ts) {
 
 .meta-node {
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -2247,7 +2576,7 @@ function formatLogTime(ts) {
 
 .prerelease-toggle {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
 }
 
 /* ===== 版本网格 ===== */
@@ -2264,20 +2593,20 @@ function formatLogTime(ts) {
   gap: 10px;
   padding: 16px;
   border-radius: 12px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
   transition: all 0.15s ease;
 
   &:hover {
     border-color: #c7d2fe;
-    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.08);
+    box-shadow: 0 4px 12px var(--shadow);
     transform: translateY(-1px);
   }
 
   &.is-current {
     border-color: #818cf8;
-    background: linear-gradient(135deg, #fff, #f5f3ff);
-    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.12);
+    background: linear-gradient(135deg, var(--surface), var(--surface-soft));
+    box-shadow: 0 4px 16px var(--shadow);
   }
 }
 
@@ -2288,10 +2617,14 @@ function formatLogTime(ts) {
   flex-wrap: wrap;
 }
 
+.card-uninstall {
+  margin-left: auto;
+}
+
 .card-version {
   font-size: 15px;
   font-weight: 700;
-  color: #1f2937;
+  color: var(--text-body);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: -0.02em;
 }
@@ -2300,11 +2633,19 @@ function formatLogTime(ts) {
   display: flex;
   justify-content: space-between;
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 .card-action {
   margin-top: auto;
+}
+
+.install-progress-label {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .empty-state {
@@ -2316,14 +2657,14 @@ function formatLogTime(ts) {
 
 /* ===== 底部状态栏 ===== */
 .dsh-footer {
-  border-top: 1px solid rgba(99, 102, 241, 0.08);
-  background: rgba(255, 255, 255, 0.6);
+  border-top: 1px solid var(--border);
+  background: var(--surface-glass);
   padding: 10px 24px;
   text-align: center;
 
   span {
     font-size: 11px;
-    color: #6b7280;
+    color: var(--text-muted);
   }
 }
 
@@ -2448,9 +2789,9 @@ function formatLogTime(ts) {
   gap: 8px;
   padding: 10px 14px;
   border-radius: 12px;
-  background: #fff;
-  border: 1px solid rgba(99, 102, 241, 0.1);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.05);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px var(--shadow);
   flex-wrap: wrap;
 }
 
@@ -2464,7 +2805,7 @@ function formatLogTime(ts) {
   .source-label {
     font-size: 12px;
     font-weight: 600;
-    color: #4b5563;
+    color: var(--text-muted);
     flex-shrink: 0;
   }
 
@@ -2480,7 +2821,7 @@ function formatLogTime(ts) {
   gap: 12px;
   padding: 4px 4px 0;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
   flex-wrap: wrap;
 }
 
@@ -2490,8 +2831,21 @@ function formatLogTime(ts) {
   gap: 4px;
 }
 
+.market-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
 .market-search {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+}
+
+.market-sort {
+  width: 150px;
+  flex-shrink: 0;
 }
 
 .category-row {
@@ -2504,8 +2858,8 @@ function formatLogTime(ts) {
 
 .cat-chip {
   border: 1px solid rgba(99, 102, 241, 0.15);
-  background: #fff;
-  color: #4b5563;
+  background: var(--chip-bg);
+  color: var(--chip-text);
   padding: 5px 12px;
   border-radius: 999px;
   font-size: 12px;
@@ -2533,7 +2887,7 @@ function formatLogTime(ts) {
 }
 
 .market-list {
-  background: #fff;
+  background: var(--surface);
   border-radius: 12px;
   border: 1px solid rgba(99, 102, 241, 0.1);
   box-shadow: 0 4px 20px rgba(99, 102, 241, 0.06);
@@ -2572,13 +2926,13 @@ function formatLogTime(ts) {
   gap: 10px;
   padding: 14px;
   border-radius: 10px;
-  background: #fff;
-  border: 1px solid rgba(99, 102, 241, 0.1);
+  background: var(--surface);
+  border: 1px solid var(--border);
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 
   &:hover {
     border-color: rgba(99, 102, 241, 0.35);
-    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.1);
+    box-shadow: 0 4px 16px var(--shadow);
     transform: translateY(-1px);
   }
 }
@@ -2589,7 +2943,7 @@ function formatLogTime(ts) {
   height: 48px;
   border-radius: 10px;
   overflow: hidden;
-  background: #f3f4f6;
+  background: var(--code-bg);
   display: grid;
   place-items: center;
 
@@ -2629,7 +2983,7 @@ function formatLogTime(ts) {
 .plugin-name {
   font-size: 14px;
   font-weight: 700;
-  color: #1e1b4b;
+  color: var(--text);
   font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
 }
 
@@ -2639,10 +2993,10 @@ function formatLogTime(ts) {
   gap: 10px;
   flex-wrap: wrap;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
 
   .sub-owner {
-    color: #6b7280;
+    color: var(--text-muted);
   }
 
   .sub-stars {
@@ -2653,13 +3007,13 @@ function formatLogTime(ts) {
   }
 
   .sub-date {
-    color: #9ca3af;
+    color: var(--text-muted);
   }
 }
 
 .plugin-desc {
   font-size: 12px;
-  color: #4b5563;
+  color: var(--text-body);
   line-height: 1.55;
   word-break: break-word;
   display: -webkit-box;
@@ -2679,7 +3033,7 @@ function formatLogTime(ts) {
 .plugin-actions {
   margin-left: auto;
   display: flex;
-  gap: 6px;
+  gap: 10px;
   flex-shrink: 0;
 }
 
@@ -2690,10 +3044,17 @@ function formatLogTime(ts) {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 14px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 12px;
-  border: 1px solid rgba(99, 102, 241, 0.1);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.05);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px var(--shadow);
+  flex-wrap: wrap;
+}
+
+.installed-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -2702,7 +3063,7 @@ function formatLogTime(ts) {
   align-items: center;
   gap: 10px;
   font-size: 12px;
-  color: #4b5563;
+  color: var(--text-muted);
   flex-wrap: wrap;
 }
 
@@ -2712,8 +3073,8 @@ function formatLogTime(ts) {
 
 .meta-value {
   font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
-  background: #eef2ff;
-  color: #4338ca;
+  background: var(--code-bg);
+  color: var(--indigo-light);
   padding: 2px 8px;
   border-radius: 4px;
 }
@@ -2725,15 +3086,15 @@ function formatLogTime(ts) {
 
 .installed-hint {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
   padding: 4px 4px 0;
 }
 
 .installed-list {
-  background: #fff;
+  background: var(--surface);
   border-radius: 12px;
-  border: 1px solid rgba(99, 102, 241, 0.1);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.05);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px var(--shadow);
   padding: 12px 14px;
   height: 420px;
   overflow: hidden;
@@ -2754,7 +3115,7 @@ function formatLogTime(ts) {
 .installed-empty {
   padding: 60px 0;
   text-align: center;
-  color: #9ca3af;
+  color: var(--text-muted);
   font-size: 13px;
 }
 
@@ -2763,8 +3124,8 @@ function formatLogTime(ts) {
   gap: 12px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: #fafbff;
-  border: 1px solid rgba(99, 102, 241, 0.08);
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
   align-items: center;
   margin-bottom: 8px;
   transition: border-color 0.15s ease;
@@ -2803,7 +3164,7 @@ function formatLogTime(ts) {
 .installed-name {
   font-size: 13px;
   font-weight: 600;
-  color: #1e1b4b;
+  color: var(--text);
   font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
 }
 
@@ -2812,12 +3173,12 @@ function formatLogTime(ts) {
   align-items: center;
   gap: 8px;
   font-size: 11px;
-  color: #6b7280;
+  color: var(--text-muted);
 }
 
 .installed-desc {
   font-size: 11px;
-  color: #6b7280;
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
@@ -2827,12 +3188,12 @@ function formatLogTime(ts) {
 
 .installed-raw {
   margin-top: 6px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 10px;
-  border: 1px solid rgba(99, 102, 241, 0.1);
+  border: 1px solid var(--border);
   padding: 8px 14px;
   font-size: 12px;
-  color: #4b5563;
+  color: var(--text-body);
 
   summary {
     cursor: pointer;
@@ -2844,11 +3205,11 @@ function formatLogTime(ts) {
   pre {
     margin: 8px 0 0;
     padding: 10px 12px;
-    background: #f8faff;
+    background: var(--code-bg);
     border-radius: 6px;
     font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
     font-size: 11px;
-    color: #1e293b;
+    color: var(--text-body);
     white-space: pre-wrap;
     word-break: break-all;
     max-height: 280px;
@@ -2864,7 +3225,7 @@ function formatLogTime(ts) {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 12px;
   border: 1px dashed rgba(99, 102, 241, 0.25);
   text-align: center;
@@ -2873,12 +3234,12 @@ function formatLogTime(ts) {
 .placeholder-title {
   font-size: 16px;
   font-weight: 700;
-  color: #1e1b4b;
+  color: var(--text);
 }
 
 .placeholder-sub {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--text-muted);
 }
 
 .placeholder-tag {
@@ -2886,7 +3247,7 @@ function formatLogTime(ts) {
   font-size: 11px;
   font-weight: 600;
   color: #6366f1;
-  background: #eef2ff;
+  background: var(--code-bg);
   padding: 4px 10px;
   border-radius: 999px;
 }
@@ -2899,10 +3260,10 @@ function formatLogTime(ts) {
 }
 
 .backup-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 12px;
-  border: 1px solid rgba(99, 102, 241, 0.1);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.05);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px var(--shadow);
   padding: 14px 16px;
 }
 
@@ -2913,13 +3274,13 @@ function formatLogTime(ts) {
 .backup-card-title {
   font-size: 14px;
   font-weight: 700;
-  color: #1e1b4b;
+  color: var(--text);
 }
 
 .backup-card-sub {
   margin-top: 4px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
@@ -2934,17 +3295,17 @@ function formatLogTime(ts) {
 .backup-label {
   font-size: 12px;
   font-weight: 600;
-  color: #4b5563;
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
 .backup-hint {
   margin: 6px 0;
   font-size: 11px;
-  color: #6b7280;
+  color: var(--text-muted);
   line-height: 1.5;
   padding: 6px 10px;
-  background: #f9fafb;
+  background: var(--code-bg);
   border-radius: 6px;
 }
 
@@ -2961,14 +3322,14 @@ function formatLogTime(ts) {
 .backup-export-preview details summary {
   cursor: pointer;
   font-size: 12px;
-  color: #4b5563;
+  color: var(--text-muted);
   padding: 4px 0;
 }
 
 .backup-export-preview pre {
   margin: 8px 0 0;
   padding: 10px;
-  background: #f9fafb;
+  background: var(--code-bg);
   border-radius: 6px;
   font-size: 11px;
   line-height: 1.5;
@@ -2988,10 +3349,10 @@ function formatLogTime(ts) {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 12px;
-  border: 1px solid rgba(99, 102, 241, 0.1);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.05);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px var(--shadow);
 }
 
 .diagnostic-meta {
@@ -3003,22 +3364,62 @@ function formatLogTime(ts) {
 .diag-title {
   font-size: 14px;
   font-weight: 700;
-  color: #1e1b4b;
+  color: var(--text);
 }
 
 .diag-sub {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
+}
+
+/* ===== 常用命令预设 ===== */
+.preset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 2px 2px 0;
+}
+
+.preset-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.preset-chip {
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  background: var(--chip-bg);
+  color: #4338ca;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+
+  &:hover:not(:disabled) {
+    border-color: rgba(99, 102, 241, 0.4);
+    background: var(--code-bg);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
 
 .command-row {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 12px;
-  border: 1px solid rgba(99, 102, 241, 0.1);
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.05);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px var(--shadow);
   padding: 12px 14px;
 }
 
@@ -3152,6 +3553,34 @@ function formatLogTime(ts) {
 .source-modal-footer {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
+}
+
+.uninstall-confirm-body {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+}
+
+.uninstall-confirm-text {
+  font-size: 13px;
+  color: var(--text-body);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.uninstall-confirm-tip {
+  font-size: 12px;
+  color: #d97706;
+  background: #fffbeb;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.uninstall-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 </style>

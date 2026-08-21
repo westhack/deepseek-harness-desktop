@@ -28,6 +28,12 @@ Compared to running `npx @deepseek-ai/dsh web` directly, this project packages t
 
 <img src="./public/images/DeepSeek-Harness.png">
 
+<img src="./preview/en/dsh2.png">
+
+<img src="./preview/en/dsh3.png">
+
+<img src="./preview/en/dsh1.png">
+
 ## Key Features
 
 ### Runtime Hosting

@@ -20,13 +20,9 @@ class Lifecycle {
   async electronAppReady() {
     logger.info('[lifecycle] electron-app-ready');
 
-    // 双击图标时显示已打开的窗口
+    // 再次打开应用时优先显示 DSH，未启动时才显示版本管理器
     electronApp.on('second-instance', () => {
-      const win = getMainWindow();
-      if (!win) return;
-      if (win.isMinimized()) win.restore();
-      win.show();
-      win.focus();
+      void dshManager.showActiveWindow();
     });
 
     // 退出前停止 DEEPSEEK HARNESS 进程
@@ -62,14 +58,8 @@ class Lifecycle {
     const y = Math.floor((height - windowHeight) / 2);
     win.setBounds({ x, y, width: windowWidth, height: windowHeight });
 
-    // 延迟显示，避免白屏
-    const { windowsOption } = getConfig();
-    if (windowsOption.show === false) {
-      win.once('ready-to-show', () => {
-        win.show();
-        win.focus();
-      });
-    }
+    // 不在这里主动显示主窗口，避免已安装 DSH 时先闪一下版本管理器
+    // 由 dshManager.initialize() 根据是否已安装 DSH 决定是否显示主窗口
   }
 
   /**

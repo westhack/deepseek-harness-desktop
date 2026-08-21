@@ -3,7 +3,7 @@
 const { mkdir, readFile } = require('node:fs/promises');
 const path = require('node:path');
 const writeFileAtomic = require('write-file-atomic');
-const { parseLocalePreference, LOCALE_PREFERENCES, REGISTRY_PREFERENCES, normalizePluginSource } = require('../../shared/contracts');
+const { parseLocalePreference, LOCALE_PREFERENCES, REGISTRY_PREFERENCES, THEME_PREFERENCES, normalizePluginSource } = require('../../shared/contracts');
 
 // 默认插件源
 const DEFAULT_PLUGIN_SOURCES = [
@@ -36,6 +36,7 @@ const defaults = {
   dismissedLatest: null,
   localePreference: 'system',
   registryPreference: 'official',
+  themePreference: 'system',
   pluginSources: DEFAULT_PLUGIN_SOURCES,
   backupConfig: DEFAULT_BACKUP_CONFIG,
 };
@@ -92,6 +93,7 @@ class StateStore {
         dismissedLatest: typeof parsed.dismissedLatest === 'string' ? parsed.dismissedLatest : null,
         localePreference: LOCALE_PREFERENCES.includes(parsed.localePreference) ? parsed.localePreference : 'system',
         registryPreference: REGISTRY_PREFERENCES.includes(parsed.registryPreference) ? parsed.registryPreference : 'official',
+        themePreference: THEME_PREFERENCES.includes(parsed.themePreference) ? parsed.themePreference : 'system',
         pluginSources: this.validatePluginSources(parsed.pluginSources),
         backupConfig: validateBackupConfig(parsed.backupConfig),
       };

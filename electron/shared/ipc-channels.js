@@ -9,6 +9,7 @@ const channels = {
   snapshot: 'dsh:snapshot',
   refresh: 'dsh:refresh',
   install: 'dsh:install',
+  uninstall: 'dsh:uninstall',
   select: 'dsh:select',
   launch: 'dsh:launch',
   stop: 'dsh:stop',
@@ -16,6 +17,7 @@ const channels = {
   openExternal: 'dsh:open-external',
   setLocale: 'desktop:set-locale',
   setRegistry: 'desktop:set-registry',
+  setTheme: 'desktop:set-theme',
   // 事件推送通道（主进程 -> 渲染进程单向）
   stateChanged: 'dsh:state-changed',
   installProgress: 'dsh:install-progress',
@@ -32,6 +34,7 @@ const channels = {
   writeClipboard: 'dsh:write-clipboard',
   pluginMarketFetch: 'dsh:plugin-market-fetch',
   pluginRunCommand: 'dsh:plugin-run-command',
+  pluginStopCommand: 'dsh:plugin-stop-command',
   pluginSourcesSet: 'dsh:plugin-sources-set',
   // 备份与恢复通道
   backupExport: 'dsh:backup-export',

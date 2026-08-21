@@ -2,7 +2,7 @@
 
 const { EventEmitter } = require('node:events');
 const semver = require('semver');
-const { parseExactVersion, parseLocalePreference, resolveLocale, parseRegistryPreference, resolveRegistryUrl, officialPackageName } = require('../../shared/contracts');
+const { parseExactVersion, parseLocalePreference, resolveLocale, parseRegistryPreference, parseThemePreference, resolveRegistryUrl, officialPackageName } = require('../../shared/contracts');
 const { runProcess } = require('./process-utils');
 const { StateStore } = require('./state-store');
 
@@ -129,6 +129,37 @@ class AppController extends EventEmitter {
     return await this.emitSnapshot();
   }
 
+  /**
+   * 卸载指定版本
+   * 若该版本正在运行，先停止；若卸载的是当前选中版本，卸载后自动切换到最新已安装版本
+   * bundled 版本不可卸载
+   * @param {string} version
+   */
+  async uninstall(version) {
+    parseExactVersion(version);
+    const installed = await this.versions.list();
+    const target = installed.find((item) => item.version === version);
+    if (!target) throw new Error('该版本未安装');
+    if (target.source === 'bundled') throw new Error('应用内置版本不可卸载');
+
+    // 若正在运行，先停止（与前端文案"停止并自动切换"一致）
+    if (this.isRuntimeActive()) {
+      await this.supervisor.stop();
+    }
+
+    await this.versions.uninstall(version);
+
+    // 卸载的是当前选中版本：自动切换到剩余的最新已安装版本
+    if (this.state.selectedVersion === version) {
+      const remaining = (await this.versions.list()).sort((a, b) => semver.rcompare(a.version, b.version));
+      this.state.selectedVersion = remaining[0]?.version ?? null;
+      await this.store.write(this.state);
+    }
+
+    this.error = null;
+    return await this.emitSnapshot();
+  }
+
   async dismissUpdate(version) {
     parseExactVersion(version);
     this.state.dismissedLatest = version;
@@ -145,6 +176,12 @@ class AppController extends EventEmitter {
   async setRegistry(preference) {
     this.state.registryPreference = parseRegistryPreference(preference);
     this.applyRegistryPreference();
+    await this.store.write(this.state);
+    return await this.emitSnapshot();
+  }
+
+  async setTheme(preference) {
+    this.state.themePreference = parseThemePreference(preference);
     await this.store.write(this.state);
     return await this.emitSnapshot();
   }
@@ -200,6 +237,7 @@ class AppController extends EventEmitter {
       locale: resolveLocale(this.state.localePreference, this.systemLocale),
       localePreference: this.state.localePreference,
       registryPreference: this.state.registryPreference,
+      themePreference: this.state.themePreference || 'system',
       pluginSources: this.state.pluginSources || [],
       backupConfig: this.state.backupConfig || null,
       nodeVersion: this.nodeVersion,

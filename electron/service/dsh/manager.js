@@ -9,7 +9,7 @@ const { logger } = require('ee-core/log');
 const { getMainWindow } = require('ee-core/electron');
 const { isDev } = require('ee-core/ps');
 
-const { channels, parseExactVersion, parseLocalePreference, parseRegistryPreference, parsePluginCommand, parseDshCommand, normalizePluginSource } = require('../../shared/contracts');
+const { channels, parseExactVersion, parseLocalePreference, parseRegistryPreference, parseThemePreference, parsePluginCommand, parseDshCommand, normalizePluginSource } = require('../../shared/contracts');
 const { AppController } = require('./controller');
 const { DshSupervisor } = require('./dsh-supervisor');
 const { DshRegistry } = require('./registry');
@@ -23,7 +23,7 @@ const menuCopy = require('./menu-copy');
 
 const APP_NAME = 'DeepSeek Harness Desktop';
 const RELEASE_DOWNLOAD_URL = 'https://github.com/westhack/deepseek-harness-desktop/releases/latest';
-const LATEST_RELEASE_API_URL = 'https://api.github.com/repos/deepseek-harness-desktop/releases/latest';
+const LATEST_RELEASE_API_URL = 'https://api.github.com/repos/westhack/deepseek-harness-desktop/releases/latest';
 const LATEST_RELEASE_API_URL_OVERRIDE = process.env.DEEPSEEK_HARNESS_DESKTOP_TEST_RELEASE_API_URL;
 const TEST_CURRENT_VERSION = process.env.DEEPSEEK_HARNESS_DESKTOP_TEST_CURRENT_VERSION;
 const TEST_ENABLE_UPDATE = process.env.DEEPSEEK_HARNESS_DESKTOP_TEST_ENABLE_UPDATE;
@@ -56,6 +56,12 @@ class DshManager {
     this.lastRuntimeStatus = 'idle';
     this.hasHiddenOnLaunch = false;
     this.isClosingDshWindowProgrammatically = false;
+    // 控制器是否已完成初始化（用于决定启动时是否显示版本管理器）
+    this.controllerInitialized = false;
+    // 主窗口就绪先于控制器初始化时置位，待控制器初始化后补充决定
+    this.windowReadyDeferred = false;
+    // 命令执行子进程（用于终止正在运行的 dsh 命令）
+    this.runningCommandProcess = null;
   }
 
   /**
@@ -129,6 +135,7 @@ class DshManager {
       const initialSnapshot = await this.controller.initialize();
       this.activeLocale = initialSnapshot.locale;
       this.activeLocalePreference = initialSnapshot.localePreference;
+      this.controllerInitialized = true;
       // 记录初始运行状态，避免启动时 DEEPSEEK HARNESS 已在运行而立即隐藏主窗口
       this.lastRuntimeStatus = initialSnapshot.runtimeStatus;
       if (['starting', 'running'].includes(initialSnapshot.runtimeStatus)) {
@@ -139,11 +146,16 @@ class DshManager {
       this.installApplicationMenu();
       this.updateAboutPanel();
 
-      // 9. 刷新版本列表并打开主窗口
+      // 9. 刷新版本列表并决定是否打开主窗口
       const refreshed = await this.controller.refresh();
       this.latestSnapshotForWindowTitle = refreshed;
       this.notifyDshUpdate(refreshed);
-      await this.openPrimaryWindow();
+      if (refreshed.selectedVersion) {
+        await this.openPrimaryWindow();
+      } else {
+        await this.showMainWindowIfNeeded();
+      }
+
 
       // 10. 4 秒后检查应用更新
       setTimeout(() => { void this.desktopUpdater?.check(); }, 4_000);
@@ -226,12 +238,35 @@ class DshManager {
   }
 
   /**
+   * 版本管理器主窗口内容就绪回调（由 lifecycle window-ready 调用）
+   * 若 DSH 已有可用版本，则保持隐藏，直接打开 DSH；否则显示版本管理器
+   */
+  handleMainWindowReady() {
+    const win = getMainWindow();
+    if (!win || win.isDestroyed()) return;
+    // 控制器尚未初始化完成：DSH 可用性未知，先保持隐藏，待 initialize 决定
+    if (!this.controller || !this.controllerInitialized) {
+      this.windowReadyDeferred = true;
+      return;
+    }
+    // DSH 已有可用版本：保持隐藏，openPrimaryWindow 会直接打开 DSH
+    if (this.controller.state.selectedVersion) {
+      return;
+    }
+    this.showMainWindowIfNeeded();
+  }
+
+  /**
    * 显示版本管理器窗口（复用 ee-core 主窗口）
    */
   showMainWindow() {
+    return this.showMainWindowIfNeeded();
+  }
+
+  async showMainWindowIfNeeded() {
     const win = getMainWindow();
     if (win && !win.isDestroyed()) {
-      win.show();
+      if (!win.isVisible()) win.show();
       win.focus();
     }
   }
@@ -336,9 +371,10 @@ class DshManager {
       const launched = await this.controller.launch();
       if (!launched.runtimeUrl) throw new Error('官方 DSH 未返回本地地址');
       await this.openDshWindow(launched.runtimeUrl);
-    } catch {
+    } catch (error) {
+      logger.error('[dsh-manager] openPrimaryWindow failed:', error instanceof Error ? error.message : error);
       // 启动失败时显示版本管理器
-      this.showMainWindow();
+      this.showMainWindowIfNeeded();
     } finally {
       this.isOpeningPrimary = false;
     }
@@ -367,6 +403,10 @@ class DshManager {
     ipcMain.handle(channels.install, async (event, version) => {
       assertManager(event);
       return await this.controller.install(parseExactVersion(version));
+    });
+    ipcMain.handle(channels.uninstall, async (event, version) => {
+      assertManager(event);
+      return await this.controller.uninstall(parseExactVersion(version));
     });
     ipcMain.handle(channels.select, async (event, version) => {
       assertManager(event);
@@ -406,6 +446,10 @@ class DshManager {
     ipcMain.handle(channels.setRegistry, async (event, raw) => {
       assertManager(event);
       return await this.controller.setRegistry(parseRegistryPreference(raw));
+    });
+    ipcMain.handle(channels.setTheme, async (event, raw) => {
+      assertManager(event);
+      return await this.controller.setTheme(parseThemePreference(raw));
     });
     ipcMain.handle(channels.appUpdateSnapshot, (event) => {
       assertManager(event);
@@ -454,6 +498,10 @@ class DshManager {
     ipcMain.handle(channels.pluginRunCommand, async (event, rawCommand) => {
       assertManager(event);
       return await this.runPluginCommand(rawCommand, event.sender);
+    });
+    ipcMain.handle(channels.pluginStopCommand, async (event) => {
+      assertManager(event);
+      return await this.stopPluginCommand();
     });
     ipcMain.handle(channels.pluginSourcesSet, async (event, sources) => {
       assertManager(event);
@@ -797,6 +845,26 @@ class DshManager {
   }
 
   /**
+   * 终止正在执行的 dsh 命令子进程
+   * @returns {Promise<{ ok: boolean, message?: string }>}
+   */
+  async stopPluginCommand() {
+    if (!this.runningCommandProcess) {
+      return { ok: false, message: '当前没有正在执行的命令' };
+    }
+    const child = this.runningCommandProcess;
+    this.runningCommandProcess = null;
+    try {
+      if (!child.killed) {
+        child.kill('SIGTERM');
+      }
+      return { ok: true, message: '命令已终止' };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : '终止失败' };
+    }
+  }
+
+  /**
    * 共享的 dsh CLI 进程执行器：负责 spawn + 行级流推送 + 退出码处理
    * @param {{ entry: string, root: string }} resolved
    * @param {string[]} args
@@ -817,12 +885,16 @@ class DshManager {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      // 保存当前命令子进程引用，供 stopPluginCommand 调用
+      this.runningCommandProcess = child;
       let stdout = '';
       let stderr = '';
       let settled = false;
       const finish = (err, payload) => {
         if (settled) return;
         settled = true;
+        // 清理进程引用
+        if (this.runningCommandProcess === child) this.runningCommandProcess = null;
         if (err) reject(err);
         else resolve(payload);
       };
@@ -1056,7 +1128,7 @@ class DshManager {
     this.tray = new Tray(trayIcon.isEmpty() ? nativeImage.createEmpty() : trayIcon);
     this.tray.setToolTip(menuCopy(this.activeLocale).trayTooltipIdle);
     // 单击托盘图标：优先显示 DSH 业务窗口（若存在），否则显示主窗口
-    this.tray.on('click', () => this.showActiveWindow());
+    this.tray.on('click', () => { void this.showActiveWindow(); });
     this.refreshTrayMenu();
   }
 
@@ -1064,12 +1136,11 @@ class DshManager {
    * 显示当前活跃窗口：DSH 业务窗口存在则显示它，否则显示版本管理器主窗口
    */
   showActiveWindow() {
-    if (this.dshWindow && !this.dshWindow.isDestroyed()) {
-      if (!this.dshWindow.isVisible()) this.dshWindow.show();
-      this.dshWindow.focus();
-      return;
+    const snapshot = this.controller ? this.controller.snapshot() : null;
+    if (snapshot && snapshot.selectedVersion && snapshot.runtimeUrl) {
+      return this.openDshWindow(snapshot.runtimeUrl);
     }
-    this.showMainWindow();
+    return this.showMainWindowIfNeeded();
   }
 
   /**
