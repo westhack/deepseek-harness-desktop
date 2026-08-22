@@ -24,6 +24,14 @@
     {
       "from": "build/menu-version-manager.png",
       "to": "ui/version-manager.png"
+    },
+    {
+      "from": "build/tray.png",
+      "to": "ui/tray.png"
+    },
+    {
+      "from": "build/tray@2x.png",
+      "to": "ui/tray@2x.png"
     }
   ],
   "publish": [

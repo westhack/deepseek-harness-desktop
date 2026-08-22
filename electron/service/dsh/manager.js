@@ -1125,11 +1125,11 @@ class DshManager {
       });
     }
 
+    // tray.png 是 macOS 模板图标（22pt），Retina 下 nativeImage 自动选 tray@2x.png
     const iconPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'ui', 'version-manager.png')
-      : path.join(app.getAppPath(), 'public', 'images', 'logo-32.png');
+      ? path.join(process.resourcesPath, 'ui', 'tray.png')
+      : path.join(app.getAppPath(), 'public', 'images', 'tray.png');
     const trayIcon = nativeImage.createFromPath(iconPath);
-    if (!trayIcon.isEmpty()) trayIcon.resize({ width: 16, height: 16 });
     if (process.platform === 'darwin' && !trayIcon.isEmpty()) trayIcon.setTemplateImage(true);
 
     this.tray = new Tray(trayIcon.isEmpty() ? nativeImage.createEmpty() : trayIcon);
