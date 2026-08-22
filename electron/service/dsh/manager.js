@@ -187,8 +187,15 @@ class DshManager {
       this.updateAboutPanel();
       this.refreshTrayMenu();
     }
-    this.setDshWindowTitle(snapshot);
-    this.showDshUpdatePopover(snapshot);
+    // DSH 业务窗口隐藏到托盘时，不对它做任何可能触发显示的操作
+    // macOS 上子窗口（popover）showInactive 会导致隐藏的父窗口被拉起
+    const dshWindowVisible = this.dshWindow && !this.dshWindow.isDestroyed() && this.dshWindow.isVisible();
+    if (dshWindowVisible) {
+      this.setDshWindowTitle(snapshot);
+      this.showDshUpdatePopover(snapshot);
+    } else {
+      this.hideDshUpdatePopover();
+    }
     this.sendToManager(channels.stateChanged, snapshot);
     this.updateMenuDshUpdateHint(snapshot);
     this.updateTrayTooltip(snapshot);
@@ -1169,6 +1176,11 @@ class DshManager {
     if (this.dshWindow && !this.dshWindow.isDestroyed()) {
       if (!this.dshWindow.isVisible()) this.dshWindow.show();
       this.dshWindow.focus();
+      // 窗口恢复可见后，立即更新标题和更新提示
+      if (this.latestSnapshotForWindowTitle) {
+        this.setDshWindowTitle(this.latestSnapshotForWindowTitle);
+        this.showDshUpdatePopover(this.latestSnapshotForWindowTitle);
+      }
     }
   }
 

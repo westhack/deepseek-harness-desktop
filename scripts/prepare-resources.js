@@ -54,7 +54,20 @@ function run(executable, args) {
 
 async function main() {
   const platform = argument('platform', process.platform);
-  const arch = argument('arch', process.arch);
+  let arch = argument('arch', process.arch);
+  // macOS Apple Silicon：检测 Rosetta 2 转译，自动纠正架构为 arm64
+  if (platform === 'darwin' && arch === 'x64') {
+    try {
+      const { execSync } = require('node:child_process');
+      const translated = execSync('sysctl -n sysctl.proc_translated 2>/dev/null', { encoding: 'utf8' }).trim();
+      if (translated === '1') {
+        console.log('检测到 Apple Silicon 上的 Rosetta 转译，自动切换为 arm64 架构');
+        arch = 'arm64';
+      }
+    } catch {
+      // sysctl 不可用，保持 x64
+    }
+  }
   if (!['darwin', 'win32'].includes(platform) || !['arm64', 'x64'].includes(arch)) {
     throw new Error('仅支持 darwin arm64/x64 与 win32 x64 资源');
   }
